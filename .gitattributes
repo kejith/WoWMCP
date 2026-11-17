@@ -1,6 +1,1 @@
-# Nicht im Release-Zip (git archive): alles, was das Spiel nicht lädt.
-.github export-ignore
-tests export-ignore
-README.md export-ignore
-.gitattributes export-ignore
-.gitignore export-ignore
+* text=auto eol=lf

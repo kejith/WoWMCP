@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  ADDON: WoWMCP
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - name: Run the addon in the Lua simulation
+        run: uv run tests/test_addon.py
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Build the zip without publishing
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -d -u -n "{package-name}-{project-version}"
+      - name: Check the zip
+        run: |
+          # The packager builds nothing for a commit that already carries a release tag.
+          if compgen -G ".release/*.zip" > /dev/null; then
+            python3 tests/check_package.py .release/*.zip
+          else
+            echo "::notice::No zip built: this commit is already tagged."
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ADDON }}
+          path: .release/*.zip
+          if-no-files-found: ignore
+
+  tag:
+    name: Tag a new version
+    # A push to main whose .toc version has no tag yet becomes a release: this job creates the tag and
+    # starts the release workflow for it. Nothing happens while the version stays the same.
+    needs: [test, package]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create the tag and start the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^## Version:[[:space:]]*//p' "$ADDON.toc" | tr -d '\r')
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::notice::$tag exists, nothing to release."
+            exit 0
+          fi
+          git tag "$tag"
+          git push origin "$tag"
+          gh workflow run release.yml --ref "$tag"
+          echo "::notice::Started the release of $tag"

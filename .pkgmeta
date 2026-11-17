@@ -1,0 +1,11 @@
+# Packaging for CurseForge, Wago and GitHub releases (https://github.com/BigWigsMods/packager).
+package-as: WoWMCP
+enable-nolib-creation: no
+
+optional-dependencies:
+  - auctionator
+
+ignore:
+  - README.md
+  - CONTRIBUTING.md
+  - tests

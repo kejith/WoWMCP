@@ -1,44 +1,51 @@
-# Syntaxprüfung bei jedem Push; ein Tag vX.Y.Z baut das Zip und legt das Release an.
 name: Release
+
+# Runs for a version tag: pushed by hand, or created by CI when the version in the .toc changes on main.
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
 
 env:
   ADDON: WoWMCP
 
 jobs:
   release:
+    name: Publish
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Lua-Syntax prüfen
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10
+      - name: Tag matches the version in the .toc
         run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --quiet lupa
-          .venv/bin/python tests/check_syntax.py
-
-      - name: Tag gegen die Version in der .toc prüfen
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          toc=$(grep -m1 '^## Version:' "$ADDON.toc" | sed 's/^## Version:[[:space:]]*//' | tr -d '\r')
-          if [ "v$toc" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME passt nicht zu Version $toc in $ADDON.toc"
+          version=$(sed -n 's/^## Version:[[:space:]]*//p' "$ADDON.toc" | tr -d '\r')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in $ADDON.toc"
             exit 1
           fi
-
-      - name: Zip bauen
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: git archive --format=zip --prefix="$ADDON/" -o "$ADDON-$GITHUB_REF_NAME.zip" HEAD
-
-      - name: Release anlegen
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Tests
+        run: uv run tests/test_addon.py
+      - name: Build the zip
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -d -u -n "{package-name}-{project-version}"
+      - name: Check the zip
+        run: python3 tests/check_package.py ".release/$ADDON-$GITHUB_REF_NAME.zip"
+      - name: Publish to GitHub, CurseForge and Wago
+        # CurseForge and Wago are skipped until the project id is in the .toc and the secret is set.
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -u -n "{package-name}-{project-version}"
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$ADDON-$GITHUB_REF_NAME.zip" --title "$ADDON ${GITHUB_REF_NAME#v}" --generate-notes
+          GH_API_TOKEN: ${{ github.token }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}

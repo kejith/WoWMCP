@@ -2,7 +2,8 @@
 -- Target: WoW Forever (Interface 16001, Mainline API family). Addons cannot do network or file I/O,
 -- so the snapshot reaches disk only when the client writes SavedVariables on /reload or logout.
 
-local ADDON_NAME = ...
+local ADDON_NAME, ns = ...
+local L = ns.L
 local ADDON_VERSION = C_AddOns and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version") or "?"
 local SCHEMA = 1
 local THROTTLE_SECONDS = 2
@@ -21,6 +22,11 @@ local RESISTANCES = { [1] = "holy", [2] = "fire", [3] = "nature", [4] = "frost",
 
 local function unpackOk(ok, ...)
     if ok then return ... end
+end
+
+-- Chat output in the language of the client (Locales.lua).
+local function say(key, ...)
+    print("|cffffd100WoWMCP:|r " .. L[key]:format(...))
 end
 
 -- Calls fn protected; returns its results, or nothing if fn is missing or raises.
@@ -62,7 +68,7 @@ local function colorHex(color)
 end
 
 -- Tooltip text below the item name, as shown in game: one string per line ("left | right" when the line has
--- a right column, e.g. "Kopf | Stoff") plus each line's left text colour (red = requirement not met).
+-- a right column, e.g. "Head | Cloth") plus each line's left text colour (red = requirement not met).
 local function tooltipLines(data)
     if type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
     local lines, colors = {}, {}
@@ -104,7 +110,7 @@ local function sumAttackPower(base, pos, neg)
     if num(base) then return base + (num(pos) or 0) + (num(neg) or 0) end
 end
 
--- Warlock Life Tap: highest known rank and its spell text ("Wandelt 310 Gesundheit in 310 Mana um").
+-- Warlock Life Tap: highest known rank and its spell text ("Converts 310 health into 310 mana").
 local LIFE_TAP_RANKS = { 11689, 11688, 11687, 1456, 1455, 1454 }
 
 local function collectLifeTap()
@@ -764,7 +770,8 @@ local function snapshot()
     local version, build, _, interface = GetBuildInfo()
     db.schema = SCHEMA
     db.updated = time()
-    db.client = { version = version, build = tonumber(build), interface = interface }
+    -- The locale tells readers which language names, tooltips and spell texts are in.
+    db.client = { version = version, build = tonumber(build), interface = interface, locale = GetLocale() }
     db.addon = { version = ADDON_VERSION }
 end
 
@@ -859,10 +866,13 @@ local function auctionatorItems()
     return ids
 end
 
+-- Names and tooltips are in the language of the client, so the export starts over when the build or the
+-- language changes. Exports from before 1.6 carry no locale and are taken as the current one.
 local function itemStore()
-    local build = clientBuild()
-    if type(WoWMCP_Items) ~= "table" or WoWMCP_Items.build ~= build then
-        WoWMCP_Items = { build = build, items = {} }
+    local build, locale = clientBuild(), GetLocale()
+    if type(WoWMCP_Items) == "table" and WoWMCP_Items.locale == nil then WoWMCP_Items.locale = locale end
+    if type(WoWMCP_Items) ~= "table" or WoWMCP_Items.build ~= build or WoWMCP_Items.locale ~= locale then
+        WoWMCP_Items = { build = build, locale = locale, items = {} }
     end
     WoWMCP_Items.items = type(WoWMCP_Items.items) == "table" and WoWMCP_Items.items or {}
     return WoWMCP_Items
@@ -884,8 +894,7 @@ local function finishItemRun()
         WoWMCP_Account.lastRequest = { id = run.requestID, action = "items", done = time(), new = run.done }
     end
     if not run.quiet or run.done > 0 then
-        print(("WoWMCP: %d new items read, %d in the export (%d not loaded). Type /reload so the app sees them.")
-            :format(run.done, count, #missing))
+        say("itemsDone", run.done, count, #missing)
     end
 end
 
@@ -908,7 +917,7 @@ local function itemTick()
                 run.done = run.done + 1
                 progressed = true
                 if run.done % 250 == 0 then
-                    print(("WoWMCP: %d/%d items..."):format(run.done, run.total))
+                    say("itemsProgress", run.done, run.total)
                 end
             end
         end
@@ -921,7 +930,7 @@ end
 local function startItemRun(opts)
     opts = opts or {}
     if itemRun then
-        print(("WoWMCP: item export already running (%d/%d)."):format(itemRun.done, itemRun.total))
+        say("itemsRunning", itemRun.done, itemRun.total)
         return
     end
     local source, ids = "auctionator", opts.items
@@ -931,7 +940,7 @@ local function startItemRun(opts)
         ids = auctionatorItems()
         if not ids then
             if not opts.quiet then
-                print("WoWMCP: Auctionator price data not found. Install Auctionator and scan the auction house first.")
+                say("noAuctionator")
             end
             return
         end
@@ -954,7 +963,7 @@ local function startItemRun(opts)
         return
     end
     run.ticker = C_Timer.NewTicker(ITEM_TICK, itemTick)
-    print(("WoWMCP: reading %d new items (%s)..."):format(run.total, source))
+    say("itemsStart", run.total, source)
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -968,14 +977,14 @@ local function runAppRequest()
     local last = WoWMCP_Account.lastRequest
     if type(last) == "table" and last.id == req.id then return end
     if req.action == "items" then
-        print(("WoWMCP: app request #%d: item export"):format(req.id))
+        say("requestItems", req.id)
         startItemRun({ full = req.full == true, items = type(req.items) == "table" and req.items or nil,
                        requestID = req.id })
     elseif req.action == "sync" then
-        print(("WoWMCP: app request #%d: snapshot"):format(req.id))
+        say("requestSync", req.id)
         snapshot()
         WoWMCP_Account.lastRequest = { id = req.id, action = "sync", done = time() }
-        print("WoWMCP: snapshot ready. Type /reload so the app sees it.")
+        say("snapshotReady")
     else
         WoWMCP_Account.lastRequest = { id = req.id, action = tostring(req.action), done = time(), error = "unknown action" }
     end
@@ -1096,42 +1105,35 @@ SlashCmdList.WOWMCP = function(msg)
         startItemRun({ full = arg == "full" })
     elseif cmd == "auto" then
         if arg == "on" or arg == "off" then WoWMCP_Account.autoItems = arg == "on" end
-        print("WoWMCP: item export after closing the auction house is "
-            .. (WoWMCP_Account.autoItems and "on" or "off") .. " (/wowmcp auto on|off)")
+        say("autoState", WoWMCP_Account.autoItems and L.on or L.off)
     elseif cmd == "status" then
-        print(("WoWMCP %s: last snapshot %s"):format(ADDON_VERSION,
-            db.updated and date("%Y-%m-%d %H:%M:%S", db.updated) or "never"))
-        print("  bank: " .. (db.bank and date("%Y-%m-%d %H:%M", db.bank.updated) or "never scanned (open your bank once)"))
+        local function at(t, fmt) return t and date(fmt or "%Y-%m-%d %H:%M", t) end
+        print(L.statusSnapshot:format(ADDON_VERSION, at(db.updated, "%Y-%m-%d %H:%M:%S") or L.never))
+        print(L.statusBank:format(db.bank and at(db.bank.updated) or L.bankNever))
         local store = itemStore()
-        print(("  item export: %d items, %s, auto %s"):format(countItems(),
-            store.updated and date("%Y-%m-%d %H:%M", store.updated) or "never run",
-            WoWMCP_Account.autoItems and "on" or "off"))
+        print(L.statusItems:format(countItems(), at(store.updated) or L.itemsNever,
+            WoWMCP_Account.autoItems and L.on or L.off))
         for _, p in pairs(db.recipes or {}) do
-            print(("  recipes %s: %d learned, read %s"):format(tostring(p.name), p.learned or 0,
-                p.updated and date("%Y-%m-%d %H:%M", p.updated) or "?"))
+            print(L.statusRecipes:format(tostring(p.name), p.learned or 0, at(p.updated) or "?"))
         end
-        if not next(db.recipes or {}) then print("  recipes: none yet (open each profession window once)") end
+        if not next(db.recipes or {}) then print(L.statusNoRecipes) end
         local p = payouts()
-        for _, kind in ipairs({ "pouches", "crates" }) do
-            for id, s in pairs(p[kind]) do
-                print(("  %s %d: %dx, avg %s"):format(kind == "pouches" and "coin pouch" or "crate favor", id, s.n,
-                    kind == "pouches" and ("%.2fs"):format(s.sum / s.n / 100) or ("%.1f"):format(s.sum / s.n)))
-            end
+        for id, s in pairs(p.pouches) do
+            print(L.statusPouch:format(id, s.n, ("%.2fs"):format(s.sum / s.n / 100)))
+        end
+        for id, s in pairs(p.crates) do
+            print(L.statusCrate:format(id, s.n, ("%.1f"):format(s.sum / s.n)))
         end
         local last = WoWMCP_Account.lastRequest
         if type(last) == "table" then
-            print(("  last app request: #%s (%s) %s"):format(tostring(last.id), tostring(last.action),
-                last.done and date("%H:%M", last.done) or "running"))
+            print(L.statusRequest:format(tostring(last.id), tostring(last.action), at(last.done, "%H:%M") or L.running))
         end
         for key, err in pairs(db.errors) do
             print(("  %s: %s"):format(key, err))
         end
     else
-        print("WoWMCP: /wowmcp sync - snapshot and reload so the app and MCP server see current data")
-        print("WoWMCP: /wowmcp items [full] - read stats of new auction house items (full: all again), then /reload")
-        print("WoWMCP: /wowmcp auto on|off - run the item export automatically when the auction house closes")
-        print("WoWMCP: /wowmcp status - snapshot time, item export, recipes, app requests and export errors")
-        print("WoWMCP: recipes are read when you open a profession window, vendor prices when you talk to a merchant")
-        print("WoWMCP: coin pouch gold and crate favor are recorded when you open a pouch or hand in a crate")
+        for _, key in ipairs({ "helpSync", "helpItems", "helpAuto", "helpStatus", "helpRecipes", "helpPayouts" }) do
+            say(key)
+        end
     end
 end
