@@ -1,0 +1,44 @@
+# Syntaxprüfung bei jedem Push; ein Tag vX.Y.Z baut das Zip und legt das Release an.
+name: Release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+env:
+  ADDON: WoWMCP
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lua-Syntax prüfen
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet lupa
+          .venv/bin/python tests/check_syntax.py
+
+      - name: Tag gegen die Version in der .toc prüfen
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          toc=$(grep -m1 '^## Version:' "$ADDON.toc" | sed 's/^## Version:[[:space:]]*//' | tr -d '\r')
+          if [ "v$toc" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zu Version $toc in $ADDON.toc"
+            exit 1
+          fi
+
+      - name: Zip bauen
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: git archive --format=zip --prefix="$ADDON/" -o "$ADDON-$GITHUB_REF_NAME.zip" HEAD
+
+      - name: Release anlegen
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$ADDON-$GITHUB_REF_NAME.zip" --title "$ADDON ${GITHUB_REF_NAME#v}" --generate-notes
