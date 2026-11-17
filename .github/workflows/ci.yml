@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Run the addon in the Lua simulation
         run: uv run tests/test_addon.py
 
@@ -45,6 +45,7 @@ jobs:
           name: ${{ env.ADDON }}
           path: .release/*.zip
           if-no-files-found: ignore
+          include-hidden-files: true
 
   tag:
     name: Tag a new version
