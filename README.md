@@ -35,6 +35,7 @@ Auctionator is optional. The item export needs it, because it reads the items fr
 The desktop app computes AH upgrades, writs, trade crates, profession recipes and consumables from the exported data. It writes the result into `AppData.lua` in the addon folder, and the game reads that file on the next `/reload`. So new data needs two reloads: one that saves the scan for the app, and one that loads what the app made of it.
 
 - **Window** (`/wowmcp show`, or together with the auction house): one tab per list, sections with their items, price and a note per item. Items marked `*` are what the list says to buy.
+  - Drag the grip in the bottom right corner to resize the window: more rows, a wider price history graph. Right-click the grip for the default size. Position and size are kept.
   - Click an item to search it in the auction house.
   - Shift-click an item to link it, into the chat or into the search box of the auction house.
   - Right-click an item to see its price history.
@@ -75,7 +76,7 @@ Auctionator keeps 21 days by default (its option "price history days"). The name
 | --- | --- | --- |
 | `WoWMCP_Char` | per character, `WTF\Account\<account>\<realm>\<name>\SavedVariables\WoWMCP.lua` | `character` (level, gold, zone, stats), `equipment` with tooltips, `bags`, `bank`, `quests`, `completedQuests`, `reputation`, `skills`, `talents`, `currencies`, `recipes` per profession, `errors`, `client` (`version`, `build`, `interface`, `locale`), `addon.version`, `updated` |
 | `WoWMCP_Items` | account, `WTF\Account\<account>\SavedVariables\WoWMCP.lua` | item export: `items[id] = {name, quality, ilvl, reqLevel, equipLoc, classID, subclassID, bind, stats, tooltip, tipColors}`, incremental per client build and language (`build`, `locale`) |
-| `WoWMCP_Account` | account, same file | `autoItems`, `lastRequest`, `vendor[itemID]` (vendor prices in copper), `payouts` (measured content of coin pouches, Merchant's Favor per trade crate), `appData` (which `AppData.lua` the game loaded), `ui` (settings and position of the list window) |
+| `WoWMCP_Account` | account, same file | `autoItems`, `lastRequest`, `vendor[itemID]` (vendor prices in copper), `payouts` (measured content of coin pouches, Merchant's Favor per trade crate), `appData` (which `AppData.lua` the game loaded), `ui` (settings, position and size of the list window) |
 
 Limits:
 

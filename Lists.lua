@@ -18,8 +18,11 @@ local L = ns.L
 
 local CALLER = "WoWMCP"            -- caller ID for Auctionator's API
 local LIST_PREFIX = "WoWMCP: "     -- Auctionator shopping lists this addon owns
-local ROWS, ROW_HEIGHT = 16, 20
-local WIDTH, PAD = 640, 12
+local ROW_HEIGHT, PAD = 20, 12
+local ROWS_TOP, BOTTOM = 98, 44    -- the rows start below the tabs and end above the buttons
+local WIDTH, HEIGHT = 640, 98 + 16 * 20 + 44 -- default size: 16 rows
+local MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT = 600, 400, 1600, 1200
+local GRIP = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-"
 local MAX_SEARCH = 60              -- items in one Auctionator search
 local SYNC_DELAY = 5               -- seconds after entering the world, so Auctionator has loaded its lists
 local VENDOR_QUIET = 300           -- seconds until a vendor hint for the same item is printed again
@@ -282,16 +285,18 @@ local current           -- the list on screen
 local historyMode = false -- the price history tab is on screen instead of a list
 local autoOpened = false
 local HISTORY = "history" -- settings().tab of the price history tab
+local visibleRows = 16  -- rows that fit the window's height
 
 local function maxOffset()
-    return math.max(0, #entries - ROWS)
+    return math.max(0, #entries - visibleRows)
 end
 
 local function refreshRows()
     if not frame then return end
     offset = math.max(0, math.min(offset, maxOffset()))
-    for i = 1, ROWS do
-        local line, entry = frame.rows[i], entries[offset + i]
+    for i = 1, #frame.rows do
+        local line = frame.rows[i]
+        local entry = i <= visibleRows and entries[offset + i] or nil
         line.entry = entry
         if not entry then
             line:Hide()
@@ -475,7 +480,7 @@ end
 local function buildRow(parent, index)
     local line = CreateFrame("Button", nil, parent)
     line:SetHeight(ROW_HEIGHT)
-    local y = -98 - (index - 1) * ROW_HEIGHT
+    local y = -ROWS_TOP - (index - 1) * ROW_HEIGHT
     line:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
     line:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -PAD - 18, y)
     line:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
@@ -535,9 +540,94 @@ local function place()
     end
 end
 
+local function size()
+    local w, h = num(try(frame.GetWidth, frame)), num(try(frame.GetHeight, frame))
+    return w or WIDTH, h or HEIGHT
+end
+
+-- Fits the content to the window's size: as many rows as there is room for, a wider info column, and
+-- the price history panel. Runs while the window is dragged larger or smaller.
+local function layout()
+    if not frame then return end
+    local w, h = size()
+    visibleRows = math.max(1, math.floor((h - ROWS_TOP - BOTTOM) / ROW_HEIGHT))
+    for i = #frame.rows + 1, visibleRows do frame.rows[i] = buildRow(frame, i) end
+    local info = math.floor(math.max(160, math.min(480, 236 + (w - WIDTH) / 2)))
+    for _, line in ipairs(frame.rows) do line.info:SetWidth(info) end
+    frame.empty:SetWidth(w - 80)
+    if frame.history and ns.history.layout then ns.history.layout(w - 2 * PAD, h - 76 - BOTTOM) end
+    refreshRows()
+end
+
+local function clampSize(w, h)
+    return math.floor(math.max(MIN_WIDTH, math.min(MAX_WIDTH, w)) + 0.5),
+        math.floor(math.max(MIN_HEIGHT, math.min(MAX_HEIGHT, h)) + 0.5)
+end
+
+-- Position and size go into the settings, so the window comes back as it was left.
+local function savePlace()
+    local point, _, relative, x, y = frame:GetPoint()
+    if point then settings().point = { point, relative or point, x or 0, y or 0 } end
+    local w, h = num(try(frame.GetWidth, frame)), num(try(frame.GetHeight, frame))
+    if w and h then settings().size = { clampSize(w, h) } end
+end
+
+local function buildGrip()
+    local grip = CreateFrame("Button", nil, frame)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", -4, 4)
+    grip:SetNormalTexture(GRIP .. "Up")
+    grip:SetHighlightTexture(GRIP .. "Highlight")
+    grip:SetPushedTexture(GRIP .. "Down")
+    grip:RegisterForClicks("RightButtonUp")
+    grip:SetScript("OnMouseDown", function(_, button)
+        if button ~= "LeftButton" then return end
+        -- Keep the top left corner where it is, whatever point the window is anchored by.
+        local left, top = num(try(frame.GetLeft, frame)), num(try(frame.GetTop, frame))
+        if left and top then
+            frame:ClearAllPoints()
+            frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+        end
+        frame.sizing = true
+        frame:StartSizing("BOTTOMRIGHT")
+    end)
+    grip:SetScript("OnMouseUp", function()
+        if not frame.sizing then return end
+        frame.sizing = false
+        frame:StopMovingOrSizing()
+        savePlace()
+        layout()
+    end)
+    -- Right-click: back to the default size.
+    grip:SetScript("OnClick", function()
+        frame:SetSize(WIDTH, HEIGHT)
+        settings().size = nil
+        layout()
+    end)
+    grip:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(L.resizeHint, 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    grip:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    return grip
+end
+
 local function buildWindow()
     frame = CreateFrame("Frame", "WoWMCPListFrame", UIParent, "BackdropTemplate")
-    frame:SetSize(WIDTH, 98 + ROWS * ROW_HEIGHT + 44)
+    local saved = settings().size
+    if type(saved) == "table" and num(saved[1]) and num(saved[2]) then
+        frame:SetSize(clampSize(saved[1], saved[2]))
+    else
+        frame:SetSize(WIDTH, HEIGHT)
+    end
+    frame:SetResizable(true)
+    if frame.SetResizeBounds then
+        frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+    elseif frame.SetMinResize then
+        frame:SetMinResize(MIN_WIDTH, MIN_HEIGHT)
+        frame:SetMaxResize(MAX_WIDTH, MAX_HEIGHT)
+    end
     frame:SetFrameStrata("MEDIUM")
     frame:SetToplevel(true)
     frame:SetClampedToScreen(true)
@@ -584,17 +674,15 @@ local function buildWindow()
     frame.note:SetWordWrap(false)
 
     frame.rows = {}
-    for i = 1, ROWS do frame.rows[i] = buildRow(frame, i) end
 
     frame.empty = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     frame.empty:SetPoint("CENTER", 0, 0)
-    frame.empty:SetWidth(WIDTH - 80)
 
     local slider = CreateFrame("Slider", nil, frame)
     slider:SetOrientation("VERTICAL")
     slider:SetWidth(12)
-    slider:SetPoint("TOPRIGHT", -PAD, -98)
-    slider:SetPoint("BOTTOMRIGHT", -PAD, 44)
+    slider:SetPoint("TOPRIGHT", -PAD, -ROWS_TOP)
+    slider:SetPoint("BOTTOMRIGHT", -PAD, BOTTOM)
     local track = slider:CreateTexture(nil, "BACKGROUND")
     track:SetAllPoints()
     track:SetColorTexture(1, 1, 1, 0.08)
@@ -620,7 +708,7 @@ local function buildWindow()
 
     frame.buy = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     frame.buy:SetSize(210, 22)
-    frame.buy:SetPoint("BOTTOMRIGHT", -PAD, 12)
+    frame.buy:SetPoint("BOTTOMRIGHT", -PAD - 12, 12) -- room for the size grip
     frame.buy:SetText(L.searchList)
     frame.buy:SetScript("OnClick", function() searchRows(shopRows(current)) end)
     frame.buy:SetScript("OnEnter", function(self)
@@ -634,9 +722,11 @@ local function buildWindow()
     frame:SetScript("OnDragStart", frame.StartMoving)
     frame:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        local point, _, relative, x, y = self:GetPoint()
-        if point then settings().point = { point, relative or point, x or 0, y or 0 } end
+        savePlace()
     end)
+    frame:SetScript("OnSizeChanged", function() layout() end)
+    frame.grip = buildGrip()
+    layout()
     frame:SetScript("OnMouseWheel", function(_, delta)
         if not historyMode then scrollTo(offset - (tonumber(delta) or 0) * 3) end
     end)

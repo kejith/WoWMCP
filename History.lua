@@ -7,13 +7,16 @@ local _, ns = ...
 local L = ns.L
 local U = ns.util -- helpers of Lists.lua
 
-local RESULT_ROWS, ROW_HEIGHT = 14, 20
-local LIST_WIDTH = 214
+local ROW_HEIGHT = 20
 local MAX_RESULTS = 200
 local INDEX_BATCH = 500             -- item names read per frame while the index is built
 local RECENT = 12                   -- items remembered as "recently viewed"
-local PLOT_LEFT, PLOT_TOP = 290, -48 -- the plot inside the panel
-local PLOT_W, PLOT_H = 322, 210
+local PLOT_TOP = -48                -- the plot inside the panel, below title and summary
+local AXIS = 76                     -- room for the price labels left of the plot
+local BELOW = 132                   -- panel height that is not plot: title, summary, dates, statistics
+-- These follow the size of the window (layout); the values are those of the default size.
+local resultRows, listWidth = 14, 214
+local plotLeft, plotW, plotH = listWidth + AXIS, 322, 210
 local OFFER_SHARE = 0.22            -- the offer bars use at most this share of the plot height
 local DAY = 86400
 
@@ -21,6 +24,7 @@ local panel
 local results, offset, selected = {}, 0, nil
 local index = { names = {}, lower = {}, ids = {}, lastDay = nil, built = false, building = false, stale = false }
 local refreshQueued = false
+local layout -- defined with the panel
 
 ---------------------------------------------------------------------------------------------------
 -- Data: Auctionator's database and the name index
@@ -237,7 +241,7 @@ local function hline(plot, y, r, g, b, a)
     t:SetColorTexture(r, g, b, a)
     t:ClearAllPoints()
     t:SetPoint("BOTTOMLEFT", plot, "BOTTOMLEFT", 0, y)
-    t:SetSize(PLOT_W, 1)
+    t:SetSize(plotW, 1)
     return t
 end
 
@@ -296,10 +300,10 @@ local function draw(id)
     local first = days[1].day
     local final = math.max(days[#days].day, index.lastDay or days[#days].day)
     local span = math.max(1, final - first)
-    local slot = PLOT_W / (span + 1)
+    local slot = plotW / (span + 1)
     local function x(day) return (day - first + 0.5) * slot end
     local lo, hi = priceRange(days)
-    local function y(price) return (price - lo) / (hi - lo) * PLOT_H end
+    local function y(price) return (price - lo) / (hi - lo) * plotH end
 
     -- Grid with prices on the left.
     for i = 0, 3 do
@@ -317,7 +321,7 @@ local function draw(id)
     for _, d in ipairs(days) do
         local cx = x(d.day)
         if most > 0 and d.offers then
-            box(plot, cx - width / 2, 0, width, d.offers / most * PLOT_H * OFFER_SHARE, 0.35, 0.55, 0.9, 0.35)
+            box(plot, cx - width / 2, 0, width, d.offers / most * plotH * OFFER_SHARE, 0.35, 0.55, 0.9, 0.35)
         end
         if d.high > d.low then
             box(plot, cx - width / 4, y(d.low), width / 2, y(d.high) - y(d.low), 1, 0.82, 0, 0.3)
@@ -357,7 +361,7 @@ local function hover(plot)
     end
     plot.marker:ClearAllPoints()
     plot.marker:SetPoint("BOTTOMLEFT", plot, "BOTTOMLEFT", (found.day - plot.first + 0.5) * plot.slot, 0)
-    plot.marker:SetSize(1, PLOT_H)
+    plot.marker:SetSize(1, plotH)
     plot.marker:Show()
     GameTooltip:SetOwner(plot, "ANCHOR_RIGHT")
     GameTooltip:SetText(date(L.historyDate, dayTime(found.day)))
@@ -417,13 +421,14 @@ local function showItem(id)
 end
 
 local function maxOffset()
-    return math.max(0, #results - RESULT_ROWS)
+    return math.max(0, #results - resultRows)
 end
 
 local function refreshResults()
     offset = math.max(0, math.min(offset, maxOffset()))
-    for i = 1, RESULT_ROWS do
-        local line, id = panel.rows[i], results[offset + i]
+    for i = 1, #panel.rows do
+        local line = panel.rows[i]
+        local id = i <= resultRows and results[offset + i] or nil
         line.id = id
         if id then
             line.icon:SetTexture(U.num(U.try(C_Item and C_Item.GetItemIconByID, id)) or U.QUESTION_MARK)
@@ -485,7 +490,7 @@ end
 
 local function buildResultRow(index_)
     local line = CreateFrame("Button", nil, panel)
-    line:SetSize(LIST_WIDTH, ROW_HEIGHT)
+    line:SetSize(listWidth, ROW_HEIGHT)
     line:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -30 - (index_ - 1) * ROW_HEIGHT)
     line:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     line.icon = line:CreateTexture(nil, "ARTWORK")
@@ -502,6 +507,36 @@ local function buildResultRow(index_)
     return line
 end
 
+-- Fits the panel to its size (width and height of the room the window gives it): a wider result list
+-- up to a point, as many result rows as fit, and the plot takes the rest.
+layout = function(width, height)
+    if not panel then return end
+    width, height = U.num(width) or 616, U.num(height) or 342
+    listWidth = math.floor(math.max(214, math.min(320, 214 + (width - 616) / 4)))
+    plotLeft = listWidth + AXIS
+    plotW = math.max(120, math.floor(width - plotLeft - 4))
+    plotH = math.max(80, math.floor(height - BELOW))
+    resultRows = math.max(1, math.floor((height - 50) / ROW_HEIGHT))
+    for i = #panel.rows + 1, resultRows do panel.rows[i] = buildResultRow(i) end
+    for _, line in ipairs(panel.rows) do line:SetWidth(listWidth) end
+    panel.box:SetWidth(listWidth - 8)
+    panel.status:ClearAllPoints()
+    panel.status:SetPoint("TOPLEFT", panel, "TOPLEFT", 4, -36 - resultRows * ROW_HEIGHT)
+    panel.status:SetWidth(listWidth)
+    panel.item:ClearAllPoints()
+    panel.item:SetPoint("TOPLEFT", panel, "TOPLEFT", listWidth + 14, 0)
+    local plot = panel.plot
+    plot:ClearAllPoints()
+    plot:SetPoint("TOPLEFT", panel, "TOPLEFT", plotLeft, PLOT_TOP)
+    plot:SetSize(plotW, plotH)
+    plot.empty:SetWidth(plotW + 40)
+    panel.change:ClearAllPoints()
+    panel.change:SetPoint("TOPLEFT", panel, "TOPLEFT", listWidth + 14, PLOT_TOP - plotH - 26)
+    panel.change:SetPoint("RIGHT", panel, "RIGHT", -4, 0)
+    refreshResults()
+    if selected and panel:IsShown() then draw(selected) end
+end
+
 local function build(parent, pad)
     panel = CreateFrame("Frame", nil, parent)
     panel:SetPoint("TOPLEFT", parent, "TOPLEFT", pad, -76)
@@ -514,7 +549,7 @@ local function build(parent, pad)
     panel:Hide()
 
     local box = CreateFrame("EditBox", nil, panel, "SearchBoxTemplate")
-    box:SetSize(LIST_WIDTH - 8, 20)
+    box:SetSize(listWidth - 8, 20)
     box:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -2)
     box:SetAutoFocus(false)
     if type(box.Instructions) == "table" then box.Instructions:SetText(L.historySearch) end
@@ -526,16 +561,13 @@ local function build(parent, pad)
     panel.box = box
 
     panel.rows = {}
-    for i = 1, RESULT_ROWS do panel.rows[i] = buildResultRow(i) end
+    for i = 1, resultRows do panel.rows[i] = buildResultRow(i) end
     panel.status = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    panel.status:SetPoint("TOPLEFT", panel, "TOPLEFT", 4, -36 - RESULT_ROWS * ROW_HEIGHT)
-    panel.status:SetWidth(LIST_WIDTH)
     panel.status:SetJustifyH("LEFT")
 
     -- The item: icon (tooltip, shift-click links, click searches it in the auction house) and name.
     local item = CreateFrame("Button", nil, panel)
     item:SetSize(26, 26)
-    item:SetPoint("TOPLEFT", panel, "TOPLEFT", LIST_WIDTH + 14, 0)
     item.icon = item:CreateTexture(nil, "ARTWORK")
     item.icon:SetAllPoints()
     item:SetScript("OnEnter", function(self)
@@ -566,8 +598,6 @@ local function build(parent, pad)
     panel.summary:SetJustifyH("LEFT")
 
     local plot = CreateFrame("Frame", nil, panel)
-    plot:SetSize(PLOT_W, PLOT_H)
-    plot:SetPoint("TOPLEFT", panel, "TOPLEFT", PLOT_LEFT, PLOT_TOP)
     plot:EnableMouse(true)
     plot.textures = pool(function()
         local t = plot:CreateTexture(nil, "ARTWORK")
@@ -586,7 +616,6 @@ local function build(parent, pad)
     plot.marker:Hide()
     plot.empty = plot:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     plot.empty:SetPoint("CENTER", plot, "CENTER", -30, 0)
-    plot.empty:SetWidth(PLOT_W + 40)
     plot:SetScript("OnEnter", function(self) self:SetScript("OnUpdate", hover) end)
     plot:SetScript("OnLeave", function(self)
         self:SetScript("OnUpdate", nil)
@@ -597,14 +626,13 @@ local function build(parent, pad)
     panel.plot = plot
 
     panel.change = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    panel.change:SetPoint("TOPLEFT", panel, "TOPLEFT", LIST_WIDTH + 14, PLOT_TOP - PLOT_H - 26)
-    panel.change:SetPoint("RIGHT", panel, "RIGHT", -4, 0)
     panel.change:SetJustifyH("LEFT")
     panel.legend = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     panel.legend:SetPoint("TOPLEFT", panel.change, "BOTTOMLEFT", 0, -4)
     panel.legend:SetPoint("RIGHT", panel, "RIGHT", -4, 0)
     panel.legend:SetJustifyH("LEFT")
     panel.legend:SetText(L.historyLegend)
+    layout(616, 342)
     return panel
 end
 
@@ -614,6 +642,7 @@ end
 
 ns.history = {
     build = build,
+    layout = function(width, height) layout(width, height) end,
     search = search,
     show = function()
         panel:Show()

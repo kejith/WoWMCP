@@ -116,6 +116,10 @@ function widget(kind, name, parent, template)
   function w:SetText(text) self.text = text end
   function w:GetText() return self.text end
   function w:GetTextWidth() return #(self.text or "") * 7 end
+  function w:SetSize(width, height) self.width, self.height = width, height end
+  function w:SetWidth(width) self.width = width end
+  function w:GetWidth() return self.width end
+  function w:GetHeight() return self.height end
   function w:SetScript(what, fn) self.scripts[what] = fn end
   function w:GetScript(what) return self.scripts[what] end
   function w:HookScript(what, fn) self.hooks[what] = fn end
@@ -732,6 +736,61 @@ def test_lists_window():
     print("ok test_lists_window")
 
 
+def resize(w, width, height):
+    """What the game does while the size grip is dragged: a new size, then OnSizeChanged."""
+    w.SetSize(w, width, height)
+    w.scripts.OnSizeChanged(w, width, height)
+
+
+def test_lists_window_resize():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    slash(lua, "show")
+    w = window(lua)
+    assert (w.width, w.height) == (640, 462) and len(lua_to_py_list(w.rows)) == 16
+    assert w.rows[1].info.width == 236
+    click(w.tabs[2])
+    assert len(visible(lua)) == 16 and w.slider.high == 34 - 16
+
+    # Larger: more rows (made when needed), a wider info column, fewer to scroll.
+    grip = w.grip
+    grip.scripts.OnMouseDown(grip, "LeftButton")
+    resize(w, 900, 662)
+    grip.scripts.OnMouseUp(grip, "LeftButton")
+    assert account(lua)["ui"]["size"] == [900, 662]
+    assert len(visible(lua)) == 26 and w.slider.high == 34 - 26 and w.rows[1].info.width == 366
+
+    # The price history uses the room: a wider result list, more result rows and a larger plot.
+    slash(lua, "price Peacebloom")
+    h = history_panel(lua)
+    assert h.plot.width == 876 - 279 - 76 - 4 and h.plot.height == 662 - 120 - 132, (h.plot.width, h.plot.height)
+    assert h.rows[1].width == 279 and len(lua_to_py_list(h.rows)) == 24
+    assert h.plot.lines.used == 2 and h.plot.textures["items"][1].width == h.plot.width
+    resize(w, 640, 462)
+    assert h.plot.width == 322 and h.plot.height == 210 and h.plot.textures["items"][1].width == 322
+    resize(w, 900, 662)
+
+    # The size survives a /reload; a right-click on the grip goes back to the default size.
+    load_addon(lua, data=app_data())
+    slash(lua, "show")
+    w = window(lua)
+    assert (w.width, w.height) == (900, 662) and len(visible(lua)) == 0, "the price history tab is open"
+    click(w.tabs[2])
+    assert len(visible(lua)) == 26
+    w.grip.Click(w.grip, "RightButton")
+    assert (w.width, w.height) == (640, 462) and len(visible(lua)) == 16 and "size" not in account(lua)["ui"]
+    assert not any(line.shown for line in lua_to_py_list(w.rows)[16:])
+
+    # A broken size in the settings is clamped to the bounds.
+    lua.execute("WoWMCP_Account.ui.size = { 5000, 10 }")
+    load_addon(lua, data=app_data())
+    slash(lua, "show")
+    w = window(lua)
+    assert (w.width, w.height) == (1600, 400) and len(lua_to_py_list(w.rows)) == 12
+    assert char(lua)["errors"] == {}
+    print("ok test_lists_window_resize")
+
+
 def test_lists_search():
     lua = new_runtime()
     load_addon(lua, data=app_data())
@@ -1132,6 +1191,7 @@ if __name__ == "__main__":
     test_item_export()
     test_app_requests()
     test_lists_window()
+    test_lists_window_resize()
     test_lists_search()
     test_lists_open_with_the_auction_house()
     test_shopping_lists()
