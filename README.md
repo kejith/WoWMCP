@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kejith/WoWMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/kejith/WoWMCP/actions/workflows/ci.yml)
 
-Export addon for World of Warcraft: Forever (interface 16001). It writes character data into its SavedVariables so that programs outside the game can read it: the desktop app and the MCP server from [wow-forever-tools](https://github.com/kejith/wow-forever-tools). Since 1.7 it also shows what the desktop app computed inside the game: lists for the auction house, lines in item tooltips and hints at merchants.
+Export addon for World of Warcraft: Forever (interface 16001). It writes character data into its SavedVariables so that programs outside the game can read it: the desktop app and the MCP server from [wow-forever-tools](https://github.com/kejith/wow-forever-tools). Since 1.7 it also shows what the desktop app computed inside the game: lists for the auction house, lines in item tooltips and hints at merchants. Since 1.8 it draws the price history of any item Auctionator has scanned.
 
 Addons have no file or network I/O. The data reaches the disk only when the game writes the SavedVariables, which is on `/reload` or logout.
 
@@ -14,7 +14,7 @@ Unpack the zip of the [latest release](https://github.com/kejith/WoWMCP/releases
 
 The desktop app installs and updates the addon with one click (page "Connection").
 
-Auctionator is optional. The item export needs it, because it reads the items from the Auctionator scans of the last 4 days. The lists use it to search several items at once and to keep shopping lists.
+Auctionator is optional. The item export needs it, because it reads the items from the Auctionator scans of the last 4 days. The lists use it to search several items at once and to keep shopping lists, the price history reads its scans.
 
 ## Commands
 
@@ -25,6 +25,7 @@ Auctionator is optional. The item export needs it, because it reads the items fr
 | `/wowmcp auto on\|off` | run the item export when the auction house closes (default: on) |
 | `/wowmcp status` | last snapshot, bank scan, item export, recipes, requests, lists from the app, export errors |
 | `/wowmcp show` | open or close the lists from the app |
+| `/wowmcp price [name]` | the price history tab, searching for the name, item ID or link if one is given |
 | `/wowmcp lists on\|off` | keep Auctionator shopping lists `WoWMCP: <list>` with what the lists say to buy (default: on) |
 | `/wowmcp tips on\|off` | lines from the app in item tooltips (default: on) |
 | `/wowmcp ah on\|off` | open the lists together with the auction house (default: on) |
@@ -36,6 +37,7 @@ The desktop app computes AH upgrades, writs, trade crates, profession recipes an
 - **Window** (`/wowmcp show`, or together with the auction house): one tab per list, sections with their items, price and a note per item. Items marked `*` are what the list says to buy.
   - Click an item to search it in the auction house.
   - Shift-click an item to link it, into the chat or into the search box of the auction house.
+  - Right-click an item to see its price history.
   - "Search" next to a section searches all of its items at once, "Search the shopping list" every marked item of the tab. Both need Auctionator.
 - **Auctionator shopping lists** `WoWMCP: <list>` hold the marked items of each list, with the amount to buy. They are written once per data file and character, a few seconds after login, and removed when a list has nothing to buy any more. What you change in them stays until the app sends new data.
 - **Tooltips**: items the lists know get light blue lines, for example "Upgrade for Chest: +12.5 points, no. 1 in the AH scan", "Reagent for Mana Potion: profit 12s per craft" or "For a writ (Journeyman): hand in 4x".
@@ -55,6 +57,17 @@ WoWMCP_AppData = { version = 1, generated = 1763400500, hash = "f3d15650d5a9a092
 ```
 
 A row is `{id, name, q (quality), n (amount), info, price (copper), shop (to buy), sub (indented)}`. Money inside a text is written `{m:<copper>}` and shown as coins. The addon reports what it loaded in `WoWMCP_Account.appData = {generated, hash, loaded}`.
+
+## Price history
+
+The last tab of the window, "Price history", works without the app and without a `/reload`: it reads Auctionator's price database, which Auctionator loads on login and updates with every scan.
+
+- **Search** by name (every word must be in the name, any case), item ID (`2447` or `#2447`) or item link. Shift-click an item into the search box, as in the profession window. An empty box lists the items you looked at last.
+- **Graph** per scan day: a line through the lowest price, a band from the lowest to the highest minimum price of the day (Auctionator notes both when it scans more than once a day) and bars for the number of offers. The time axis runs to the newest scan day of the whole database, so an item that vanished from the auction house ends early. Hover a day for its numbers.
+- Below the graph: the last price seen, and over the scan days the lowest, highest and average lowest price and the change from the first to the last day.
+- Click the icon to search the item in the auction house, shift-click it to link it.
+
+Auctionator keeps 21 days by default (its option "price history days"). The names are read from the client a few hundred per frame the first time the tab opens; names the client has not loaded yet arrive a moment later.
 
 ## What is exported
 

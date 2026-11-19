@@ -11,6 +11,7 @@
 --
 -- Money inside a text is written {m:<copper>} and becomes coins here. Rows marked `shop` also go into
 -- Auctionator shopping lists called "WoWMCP: <list title>". Nothing here touches the export in WoWMCP.lua.
+-- The window's last tab, the price history, lives in History.lua; this file switches to it.
 
 local _, ns = ...
 local L = ns.L
@@ -264,6 +265,12 @@ local function syncShoppingLists()
     if count > 0 then say("listsSynced", count) end
 end
 
+-- What History.lua (the price history tab) shares with this file.
+ns.util = {
+    try = try, num = num, str = str, coins = coins, settings = settings, itemLink = itemLink,
+    searchRows = searchRows, QUESTION_MARK = QUESTION_MARK,
+}
+
 ---------------------------------------------------------------------------------------------------
 -- Window
 ---------------------------------------------------------------------------------------------------
@@ -272,7 +279,9 @@ local frame
 local entries = {}      -- what the rows show: {header = section} or {row = row}
 local offset = 0        -- index of the first visible entry, minus one
 local current           -- the list on screen
+local historyMode = false -- the price history tab is on screen instead of a list
 local autoOpened = false
+local HISTORY = "history" -- settings().tab of the price history tab
 
 local function maxOffset()
     return math.max(0, #entries - ROWS)
@@ -344,8 +353,12 @@ local function shopRows(list)
 end
 
 local function showList(list)
-    current = list
+    current, historyMode = list, false
     entries, offset = {}, 0
+    if ns.history then ns.history.hide() end
+    frame.historyTab:UnlockHighlight()
+    frame.buy:Show()
+    frame.empty:Show()
     if list then
         settings().tab = list.key
         for _, section in ipairs(list.sections) do
@@ -363,6 +376,21 @@ local function showList(list)
     frame.note:SetText(list and expand(list.note) or "")
     frame.buy:SetEnabled(#shopRows(list) > 0)
     refreshRows()
+end
+
+-- The price history tab: the rows of the lists make room for the panel of History.lua.
+local function showHistory()
+    if not (ns.history and frame.history) then return end
+    current, historyMode = nil, true
+    settings().tab = HISTORY
+    entries, offset = {}, 0
+    refreshRows()
+    for _, tab in ipairs(frame.tabs) do tab:UnlockHighlight() end
+    frame.historyTab:LockHighlight()
+    frame.note:SetText("")
+    frame.buy:Hide()
+    frame.empty:Hide()
+    ns.history.show()
 end
 
 local function refreshWindow()
@@ -387,6 +415,15 @@ local function refreshWindow()
         end
         tab:SetShown(list ~= nil)
     end
+    local history = frame.historyTab
+    history:ClearAllPoints()
+    if previous > 0 then
+        history:SetPoint("LEFT", frame.tabs[previous], "RIGHT", 4, 0)
+    else
+        history:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -46)
+    end
+    history:SetWidth(math.max(70, (num(history:GetTextWidth()) or 80) + 22))
+    history:SetShown(frame.history ~= nil)
     local chosen = lists[1]
     for _, list in ipairs(lists) do
         if list.key == ui.tab then chosen = list end
@@ -399,7 +436,7 @@ local function refreshWindow()
     end
     frame.empty:SetText(chosen and "" or L.noData:format(str(UnitName("player")) or "?"))
     frame.auto:SetChecked(ui.ah)
-    showList(chosen)
+    if ui.tab == HISTORY and frame.history then showHistory() else showList(chosen) end
 end
 
 local function rowEnter(line)
@@ -416,10 +453,17 @@ local function rowEnter(line)
     GameTooltip:Show()
 end
 
-local function rowClick(line)
+local function rowClick(line, button)
     local entry = line.entry
     local row = entry and entry.row
     if not row then return end
+    if button == "RightButton" then
+        if frame.history then
+            showHistory()
+            ns.history.open(row.id)
+        end
+        return
+    end
     if IsModifiedClick and IsModifiedClick() then
         -- Shift: link into the chat or into the auction house search, Ctrl: dressing room.
         if HandleModifiedItemClick then HandleModifiedItemClick(itemLink(row)) end
@@ -435,6 +479,7 @@ local function buildRow(parent, index)
     line:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
     line:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -PAD - 18, y)
     line:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    line:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
     line.icon = line:CreateTexture(nil, "ARTWORK")
     line.icon:SetSize(ROW_HEIGHT - 4, ROW_HEIGHT - 4)
@@ -525,6 +570,12 @@ local function buildWindow()
         tab:Hide()
         frame.tabs[i] = tab
     end
+    frame.historyTab = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    frame.historyTab:SetSize(90, 22)
+    frame.historyTab:SetText(L.historyTab)
+    frame.historyTab:SetScript("OnClick", function() showHistory() end)
+    frame.historyTab:Hide()
+    if ns.history then frame.history = ns.history.build(frame, PAD) end
 
     frame.note = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.note:SetPoint("TOPLEFT", PAD, -76)
@@ -586,7 +637,9 @@ local function buildWindow()
         local point, _, relative, x, y = self:GetPoint()
         if point then settings().point = { point, relative or point, x or 0, y or 0 } end
     end)
-    frame:SetScript("OnMouseWheel", function(_, delta) scrollTo(offset - (tonumber(delta) or 0) * 3) end)
+    frame:SetScript("OnMouseWheel", function(_, delta)
+        if not historyMode then scrollTo(offset - (tonumber(delta) or 0) * 3) end
+    end)
     frame:SetScript("OnHide", function() autoOpened = false end)
 end
 
@@ -599,6 +652,14 @@ end
 
 local function toggleWindow()
     if frame and frame:IsShown() then frame:Hide() else showWindow() end
+end
+
+-- /wowmcp price [name, ID or link]: the window on the price history tab.
+local function openHistory(what)
+    if not ns.history then return end
+    if not (frame and frame:IsShown()) then showWindow() end
+    showHistory()
+    ns.history.open(tonumber(what) or what)
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -729,6 +790,7 @@ end)
 
 local function switch(key, stateText, arg, changed)
     local ui = settings()
+    arg = type(arg) == "string" and arg:lower() or arg
     if arg == "on" or arg == "off" then
         ui[key] = arg == "on"
         if changed then changed(ui[key]) end
@@ -738,6 +800,7 @@ end
 
 ns.commands = {
     show = toggleWindow,
+    price = openHistory,
     tips = function(arg) switch("tips", "tipsState", arg) end,
     ah = function(arg) switch("ah", "ahState", arg) end,
     lists = function(arg)

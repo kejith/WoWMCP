@@ -123,6 +123,7 @@ function widget(kind, name, parent, template)
   function w:UnregisterEvent(event) self.events[event] = nil end
   function w:CreateFontString() return widget("FontString", nil, self) end
   function w:CreateTexture() return widget("Texture", nil, self) end
+  function w:CreateLine() return widget("Line", nil, self) end
   function w:SetTexture(texture) self.texture = texture end
   function w:SetChecked(on) self.checked = on end
   function w:GetChecked() return self.checked end
@@ -143,7 +144,9 @@ function widget(kind, name, parent, template)
   function w:GetValue() return self.value end
   function w:LockHighlight() self.locked = true end
   function w:UnlockHighlight() self.locked = false end
-  function w:Click() if self.scripts.OnClick and self:IsEnabled() then self.scripts.OnClick(self, "LeftButton") end end
+  function w:Click(button)
+    if self.scripts.OnClick and self:IsEnabled() then self.scripts.OnClick(self, button or "LeftButton") end
+  end
   if template == "UICheckButtonTemplate" then w.Text = widget("FontString", nil, w) end
   return setmetatable(w, widgetMeta)
 end
@@ -168,6 +171,7 @@ local function tooltipStub(name)
   function t:SetOwner() self.lines = {} end
   function t:SetText(text) self.lines = { text } end
   function t:AddLine(text) self.lines[#self.lines + 1] = text end
+  function t:AddDoubleLine(left, right) self.lines[#self.lines + 1] = left .. ": " .. right end
   function t:GetItem() if self.item and items[self.item] then return items[self.item].name, link(self.item) end end
   function t:SetItemByID(id)
     self.item = id
@@ -190,6 +194,12 @@ end
 function IsModifiedClick() return modified end
 linked = {}
 function HandleModifiedItemClick(itemLink) linked[#linked + 1] = itemLink end
+function hooksecurefunc(t, name, fn)
+  local original = t[name]
+  t[name] = function(...) local r = original(...) fn(...) return r end
+end
+ChatFrameUtil = { InsertLink = function() return false end }
+function GetCursorPosition() return cursorX or 0, 0 end
 
 -- The auction house and Auctionator's API for other addons. Shopping lists live in `shopping`, as they
 -- do in Auctionator's SavedVariables: they survive a /reload.
@@ -243,6 +253,7 @@ items = {
   [2447] = { name = "Peacebloom", equipLoc = "", classID = 7, loaded = true },
   [118] = { name = "Minor Healing Potion", equipLoc = "", classID = 0, loaded = true },
   [284583] = { name = "Coin Pouch", equipLoc = "", classID = 15, loaded = true },
+  [3000] = { name = "Late Leaf", equipLoc = "", classID = 7, loaded = false, noName = true },
 }
 local function itemID(x) return type(x) == "number" and x or tonumber(x:match("item:(%d+)")) end
 function link(id) return "|cff1eff00|Hitem:" .. id .. "::::::::46:::::|h[" .. items[id].name .. "]|h|r" end
@@ -258,7 +269,7 @@ C_Item = {
     if it then return id, "Armor", "Cloth", it.equipLoc, 134400, it.classID, 1 end
   end,
   GetItemStats = function() return { ITEM_MOD_INTELLECT_SHORT = 10, nested = {} } end,
-  GetItemNameByID = function(id) return items[id] and items[id].name end,
+  GetItemNameByID = function(id) return items[id] and not items[id].noName and items[id].name or nil end,
   GetItemCount = function(id) return counts[id] or 0 end,
   RequestLoadItemDataByID = function(id) if items[id] then items[id].loaded = true end end,
   GetItemIconByID = function(id) return items[id] and 130000 + id or nil end,
@@ -354,11 +365,16 @@ function GetMerchantNumItems() return #stock end
 function GetMerchantItemID(i) return stock[i].id end
 C_MerchantFrame = { GetItemInfo = function(i) return stock[i] end }
 
--- Auctionator: 1001 and 1002 were seen today, 1003 a month ago, 2447 is not equippable.
+-- Auctionator: 1001 and 1002 were seen today, 1003 a month ago, 2447 is not equippable and has a price
+-- history of three scan days (the lowest price of day 97 was 350, its highest minimum 420). The client
+-- does not know the name of 3000 yet.
 local day0 = clock - 86400 * 100
 Auctionator = { Constants = { SCAN_DAY_0 = day0 }, Database = { db = {
   ["1001"] = { h = { ["100"] = 5 } }, ["1002"] = { h = { ["100"] = 5 } },
-  ["1003"] = { h = { ["70"] = 5 } }, ["2447"] = { h = { ["100"] = 5 } }, ["g:1:2"] = { h = { ["100"] = 5 } },
+  ["1003"] = { h = { ["70"] = 5 } }, ["g:1:2"] = { h = { ["100"] = 5 } }, version = 2,
+  ["2447"] = { m = 360, h = { ["95"] = 300, ["97"] = 420, ["100"] = 380 }, l = { ["97"] = 350 },
+               a = { ["95"] = 40, ["97"] = 12, ["100"] = 25 } },
+  ["3000"] = { m = 7, h = { ["99"] = 7 } },
 } } }
 local function checked(caller, term)
   assert(type(caller) == "string" and caller ~= "", "caller ID")
@@ -898,6 +914,159 @@ def test_lists_without_or_with_bad_data():
     print("ok test_lists_without_or_with_bad_data")
 
 
+def history_panel(lua):
+    return window(lua).history
+
+
+def type_in(lua, text):
+    box = history_panel(lua).box
+    box.SetText(box, text)
+    box.hooks.OnTextChanged(box, True)
+
+
+def results(lua):
+    return [line.name.text for line in lua_to_py_list(history_panel(lua).rows) if line.shown]
+
+
+def day_text(lua, day, fmt="%m/%d"):
+    return lua.eval(f"os.date('{fmt}', Auctionator.Constants.SCAN_DAY_0 + {day} * 86400 + 43200)")
+
+
+def test_price_history():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    slash(lua, "price")
+    w = window(lua)
+    h = history_panel(lua)
+    assert w.shown and h.shown and w.historyTab.locked and w.historyTab.text == "Price history"
+    assert not any(t.locked for t in lua_to_py_list(w.tabs)) and not w.buy.shown and not w.empty.shown
+    assert visible(lua) == [] and account(lua)["ui"]["tab"] == "history"
+    assert h.status.text == "type at least two letters" and h.plot.empty.text.startswith("Search for an item")
+
+    # Any case; one hit opens itself.
+    type_in(lua, "PEACE")
+    assert results(lua) == ["|cff1eff00Peacebloom|r"] and h.status.text == "1 items", results(lua)
+    assert h.title.text == "|cff1eff00Peacebloom|r" and h.item.shown
+    assert h.summary.text == f"Last seen {day_text(lua, 100)} at 0g 3s 60c", h.summary.text
+    stats = h.change.text
+    assert stats.startswith("3 scan days: lowest 3") and stats.endswith("change +27%"), stats
+    plot = h.plot
+    assert not plot.empty.shown and len(lua_to_py_list(plot.days)) == 3
+    assert plot.lines.used == 2, "a line between each two scan days"
+    labels = [plot.labels["items"][i].text for i in range(1, plot.labels.used + 1)]
+    # Four prices on the axis, then the first, the last and the middle date.
+    assert labels[4:] == [day_text(lua, 95), day_text(lua, 100), day_text(lua, 97)], labels
+    assert "|cffffd700g|r" not in "".join(labels[:4]) and "|cffc7c7cfs|r" in labels[3], labels
+
+    # The mouse over day 97: lowest and highest minimum price and the offers of that day.
+    lua.execute("cursorX = 100 + 2.5 * 322 / 6")
+    plot.GetLeft = lua.eval("function() return 100 end")
+    plot.scripts.OnEnter(plot)
+    plot.scripts.OnUpdate(plot)
+    tip = lua_to_py(lua.globals().GameTooltip.lines)
+    assert tip[1:] == ["Lowest price: 0g 3s 50c", "Highest minimum price: 0g 4s 20c", "Offers: 12"], tip
+    assert plot.marker.shown
+    plot.scripts.OnLeave(plot)
+    assert not plot.marker.shown
+
+    # Every word must be in the name; shorter names first.
+    type_in(lua, "of t")
+    assert results(lua) == ["|cff1eff00Hat of Testing|r", "|cff1eff00Staff of Waiting|r"], results(lua)
+    assert h.status.text == "2 items"
+    click(h.rows[2])
+    assert h.title.text.endswith("Staff of Waiting|r") and h.rows[2].locked and not h.rows[1].locked
+    assert h.change.text.startswith("1 scan days") and h.change.text.endswith("change ±0%"), h.change.text
+    type_in(lua, "#2447")
+    assert h.title.text == "|cff1eff00Peacebloom|r"
+    type_in(lua, lua.eval("link(1001)"))
+    assert h.title.text.endswith("Hat of Testing|r") and results(lua) == [h.title.text]
+    type_in(lua, "99999")
+    assert results(lua) == [] and h.status.text == "0 items"
+
+    # An empty box lists what was looked at, newest first; it is kept over a /reload.
+    type_in(lua, "")
+    assert h.status.text == "recently viewed" and len(results(lua)) == 3 and "Hat of Testing" in results(lua)[0]
+    assert account(lua)["ui"]["historyRecent"] == [1001, 2447, 1002], account(lua)["ui"]["historyRecent"]
+
+    # A name the client sends later is found once it arrives.
+    type_in(lua, "leaf")
+    assert results(lua) == []
+    lua.execute("items[3000].noName = nil; fire('GET_ITEM_INFO_RECEIVED', 3000, true); advance(1)")
+    assert len(results(lua)) == 1 and "Late Leaf" in results(lua)[0], results(lua)
+
+    # A new scan: new items for the search.
+    lua.execute("""items[4000] = { name = "Fresh Fish", equipLoc = "", classID = 7, loaded = true }
+                   Auctionator.Database.db["4000"] = { m = 50, h = { ["100"] = 50 } }
+                   fire('AUCTION_HOUSE_CLOSED'); advance(2)""")
+    type_in(lua, "fish")
+    assert len(results(lua)) == 1 and h.summary.text.endswith("at 0g 0s 50c")
+
+    # Shift-click on an item while the search box has the focus.
+    h.box.HasFocus = lua.eval("function() return true end")
+    lua.execute("ChatFrameUtil.InsertLink(link(2447))")
+    assert h.box.text == "Peacebloom" and h.title.text == "|cff1eff00Peacebloom|r"
+    h.box.HasFocus = lua.eval("function() return false end")
+    lua.execute("ChatFrameUtil.InsertLink(link(1001))")
+    assert h.box.text == "Peacebloom" and h.title.text == "|cff1eff00Peacebloom|r"
+
+    # Shift-click on a result links it; the icon searches the item in the auction house.
+    lua.execute("modified = true")
+    click(h.rows[1])
+    lua.execute("modified = false")
+    assert lua_to_py(lua.globals().linked)[-1] == lua.eval("link(2447)")
+    lua.execute("AuctionHouseFrame.shown = true")
+    click(h.item)
+    assert lua_to_py(lua.globals().searches)[-1] == ["Peacebloom"]
+
+    # A list tab brings the rows back; right-click on a row of a list opens its history.
+    click(w.tabs[3])
+    assert not h.shown and w.buy.shown
+    assert visible(lua) == [("head", "Potions", ""), ("item", "Minor Healing Potion", "", "")]
+    w.rows[2].Click(w.rows[2], "RightButton")
+    assert h.shown and h.title.text.endswith("Minor Healing Potion|r")
+    assert h.plot.empty.text == "Auctionator has no prices for this item." and h.change.text == ""
+    assert h.plot.labels.used == 0
+    w.scripts.OnMouseWheel(w, -1)
+
+    # The tab is remembered; the command keeps the case of the name.
+    slash(lua, "show")
+    load_addon(lua, data=app_data())
+    slash(lua, "price Peacebloom")
+    h = history_panel(lua)
+    assert window(lua).historyTab.locked and h.box.text == "Peacebloom" and h.title.text == "|cff1eff00Peacebloom|r"
+    slash(lua, "price 1001")
+    assert h.title.text.endswith("Hat of Testing|r")
+    slash(lua, "ah ON")
+    assert printed(lua)[-1].endswith("is on (/wowmcp ah on|off)")
+    assert char(lua)["errors"] == {}
+    print("ok test_price_history")
+
+
+def test_price_history_without_auctionator_or_lists():
+    lua = new_runtime()
+    lua.execute("Auctionator = nil")
+    load_addon(lua, data="nil")
+    slash(lua, "show")
+    w = window(lua)
+    assert w.empty.text.startswith("No lists for Tester yet") and w.historyTab.shown and tabs(lua) == []
+    click(w.historyTab)
+    h = history_panel(lua)
+    assert h.plot.empty.text.startswith("Auctionator price data not found") and not w.empty.shown
+    type_in(lua, "peace")
+    assert results(lua) == [] and h.status.text == ""
+    assert char(lua)["errors"] == {}
+
+    lua = new_runtime("deDE")
+    load_addon(lua, data=app_data())
+    slash(lua, "price Ärger")  # nothing, but the umlaut is lowered without an error
+    h = history_panel(lua)
+    assert window(lua).historyTab.text == "Preisverlauf" and h.status.text == "0 Items"
+    type_in(lua, "peace")
+    assert h.change.text.startswith("3 Scantage: niedrigster"), h.change.text
+    assert h.summary.text == f"Zuletzt gesehen am {day_text(lua, 100, '%d.%m.')} für 0g 3s 60c", h.summary.text
+    print("ok test_price_history_without_auctionator_or_lists")
+
+
 def test_lists_in_german():
     lua = new_runtime("deDE")
     load_addon(lua, data=app_data())
@@ -921,7 +1090,7 @@ def test_locales():
     for key, text in texts["enUS"].items():
         assert re.findall(r"%\.?\d*[dsf]", text) == re.findall(r"%\.?\d*[dsf]", texts["deDE"][key]), key
     # Every text the code asks for exists.
-    code = read("WoWMCP.lua") + read("Lists.lua")
+    code = read("WoWMCP.lua") + read("Lists.lua") + read("History.lua")
     used = (set(re.findall(r"\bL\.(\w+)", code)) | set(re.findall(r'say\("(\w+)"', code))
             | set(re.findall(r'"(help\w+|\w+State)"', code)))
     assert used and used <= set(texts["enUS"]), used - set(texts["enUS"])
@@ -945,7 +1114,7 @@ def test_toc():
     fields, files = toc()
     assert fields["Interface"] == "16001" and re.fullmatch(r"\d+\.\d+\.\d+", fields["Version"]), fields
     # The data files come first, the texts before the code, and the window after the export.
-    order = ["AppRequest.lua", "AppData.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua"]
+    order = ["AppRequest.lua", "AppData.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua", "History.lua"]
     assert [f for f in files if f in order] == order and "WoWMCP_Account" in fields["SavedVariables"], files
     for name in files:
         assert os.path.isfile(os.path.join(ROOT, name)), f"{name} is listed in the .toc but missing"
@@ -968,6 +1137,8 @@ if __name__ == "__main__":
     test_shopping_lists()
     test_tooltip_lines_and_vendor_hints()
     test_lists_without_or_with_bad_data()
+    test_price_history()
+    test_price_history_without_auctionator_or_lists()
     test_lists_in_german()
     test_locales()
     test_toc()

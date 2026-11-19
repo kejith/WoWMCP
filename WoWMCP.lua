@@ -1095,7 +1095,9 @@ end
 
 SLASH_WOWMCP1 = "/wowmcp"
 SlashCmdList.WOWMCP = function(msg)
-    local cmd, arg = strtrim(msg or ""):lower():match("^(%S*)%s*(.-)$")
+    local cmd, raw = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
+    cmd = cmd:lower()
+    local arg = raw:lower() -- the window's commands get the text as typed (item names)
     local db = WoWMCP_Char
     if cmd == "sync" then
         snapshot()
@@ -1133,10 +1135,10 @@ SlashCmdList.WOWMCP = function(msg)
             print(("  %s: %s"):format(key, err))
         end
     elseif ns.commands and ns.commands[cmd] then
-        ns.commands[cmd](arg) -- the window and its switches, Lists.lua
+        ns.commands[cmd](raw) -- the window and its switches, Lists.lua
     else
-        for _, key in ipairs({ "helpSync", "helpItems", "helpAuto", "helpStatus", "helpShow", "helpLists", "helpTips",
-                               "helpAH", "helpRecipes", "helpPayouts" }) do
+        for _, key in ipairs({ "helpSync", "helpItems", "helpAuto", "helpStatus", "helpShow", "helpPrice",
+                               "helpLists", "helpTips", "helpAH", "helpRecipes", "helpPayouts" }) do
             say(key)
         end
     end
