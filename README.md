@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kejith/WoWMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/kejith/WoWMCP/actions/workflows/ci.yml)
 
-Export addon for World of Warcraft: Forever (interface 16001). It writes character data into its SavedVariables so that programs outside the game can read it: the desktop app and the MCP server from [wow-forever-tools](https://github.com/kejith/wow-forever-tools).
+Export addon for World of Warcraft: Forever (interface 16001). It writes character data into its SavedVariables so that programs outside the game can read it: the desktop app and the MCP server from [wow-forever-tools](https://github.com/kejith/wow-forever-tools). Since 1.7 it also shows what the desktop app computed inside the game: lists for the auction house, lines in item tooltips and hints at merchants.
 
 Addons have no file or network I/O. The data reaches the disk only when the game writes the SavedVariables, which is on `/reload` or logout.
 
@@ -14,7 +14,7 @@ Unpack the zip of the [latest release](https://github.com/kejith/WoWMCP/releases
 
 The desktop app installs and updates the addon with one click (page "Connection").
 
-Auctionator is optional. The item export needs it, because it reads the items from the Auctionator scans of the last 4 days.
+Auctionator is optional. The item export needs it, because it reads the items from the Auctionator scans of the last 4 days. The lists use it to search several items at once and to keep shopping lists.
 
 ## Commands
 
@@ -23,7 +23,38 @@ Auctionator is optional. The item export needs it, because it reads the items fr
 | `/wowmcp sync` | take a snapshot and `/reload`, so app and server see current data |
 | `/wowmcp items [full]` | read stats and tooltips of the equippable auction house items (only new ones, with `full` all of them), then `/reload` |
 | `/wowmcp auto on\|off` | run the item export when the auction house closes (default: on) |
-| `/wowmcp status` | last snapshot, bank scan, item export, recipes, requests, export errors |
+| `/wowmcp status` | last snapshot, bank scan, item export, recipes, requests, lists from the app, export errors |
+| `/wowmcp show` | open or close the lists from the app |
+| `/wowmcp lists on\|off` | keep Auctionator shopping lists `WoWMCP: <list>` with what the lists say to buy (default: on) |
+| `/wowmcp tips on\|off` | lines from the app in item tooltips (default: on) |
+| `/wowmcp ah on\|off` | open the lists together with the auction house (default: on) |
+
+## Lists from the app
+
+The desktop app computes AH upgrades, writs, trade crates, profession recipes and consumables from the exported data. It writes the result into `AppData.lua` in the addon folder, and the game reads that file on the next `/reload`. So new data needs two reloads: one that saves the scan for the app, and one that loads what the app made of it.
+
+- **Window** (`/wowmcp show`, or together with the auction house): one tab per list, sections with their items, price and a note per item. Items marked `*` are what the list says to buy.
+  - Click an item to search it in the auction house.
+  - Shift-click an item to link it, into the chat or into the search box of the auction house.
+  - "Search" next to a section searches all of its items at once, "Search the shopping list" every marked item of the tab. Both need Auctionator.
+- **Auctionator shopping lists** `WoWMCP: <list>` hold the marked items of each list, with the amount to buy. They are written once per data file and character, a few seconds after login, and removed when a list has nothing to buy any more. What you change in them stays until the app sends new data.
+- **Tooltips**: items the lists know get light blue lines, for example "Upgrade for Chest: +12.5 points, no. 1 in the AH scan", "Reagent for Mana Potion: profit 12s per craft" or "For a writ (Journeyman): hand in 4x".
+- **Merchants**: when a merchant sells a recipe the app found worth learning, the addon says so in the chat.
+
+The data is per character, by first name. Texts in the file are in the language of the client.
+
+```lua
+WoWMCP_AppData = { version = 1, generated = 1763400500, hash = "f3d15650d5a9a092", locale = "enUS", scanDate = "2026-11-18",
+  chars = { Tester = {
+    lists = { { key = "upgrades", title = "AH upgrades", note = "Budget {m:150000}", sections = {
+      { title = "Chest", note = "now: Old Robe", rows = {
+        { id = 9001, name = "Robe of Tests", q = 2, info = "+12.5", price = 90000, shop = true } } } } } },
+    tips = { [9001] = { "Upgrade for Chest: +12.5 points, no. 1 in the AH scan ({m:90000})" } },
+    vendor = { [7001] = "Teaches Elixir of Gain: profit {m:3000} per craft" },
+  } } }
+```
+
+A row is `{id, name, q (quality), n (amount), info, price (copper), shop (to buy), sub (indented)}`. Money inside a text is written `{m:<copper>}` and shown as coins. The addon reports what it loaded in `WoWMCP_Account.appData = {generated, hash, loaded}`.
 
 ## What is exported
 
@@ -31,7 +62,7 @@ Auctionator is optional. The item export needs it, because it reads the items fr
 | --- | --- | --- |
 | `WoWMCP_Char` | per character, `WTF\Account\<account>\<realm>\<name>\SavedVariables\WoWMCP.lua` | `character` (level, gold, zone, stats), `equipment` with tooltips, `bags`, `bank`, `quests`, `completedQuests`, `reputation`, `skills`, `talents`, `currencies`, `recipes` per profession, `errors`, `client` (`version`, `build`, `interface`, `locale`), `addon.version`, `updated` |
 | `WoWMCP_Items` | account, `WTF\Account\<account>\SavedVariables\WoWMCP.lua` | item export: `items[id] = {name, quality, ilvl, reqLevel, equipLoc, classID, subclassID, bind, stats, tooltip, tipColors}`, incremental per client build and language (`build`, `locale`) |
-| `WoWMCP_Account` | account, same file | `autoItems`, `lastRequest`, `vendor[itemID]` (vendor prices in copper), `payouts` (measured content of coin pouches, Merchant's Favor per trade crate) |
+| `WoWMCP_Account` | account, same file | `autoItems`, `lastRequest`, `vendor[itemID]` (vendor prices in copper), `payouts` (measured content of coin pouches, Merchant's Favor per trade crate), `appData` (which `AppData.lua` the game loaded), `ui` (settings and position of the list window) |
 
 Limits:
 
@@ -53,13 +84,15 @@ WoWMCP_AppRequest = { id = 1, action = "items", full = false }
 
 ## Development
 
-`tests/test_addon.py` runs the addon in Lua 5.4 against a stubbed WoW API (snapshot, combat, bank, payouts, recipes, vendor prices, item export, requests, both languages, the `.toc`):
+`tests/test_addon.py` runs the addon in Lua 5.4 against a stubbed WoW API (snapshot, combat, bank, payouts, recipes, vendor prices, item export, requests, the list window with search, shopping lists, tooltip lines and vendor hints, both languages, the `.toc`):
 
 ```
 uv run tests/test_addon.py
 ```
 
-The game itself runs Lua 5.1 with its own API, so a change still needs a look in the game.
+The game itself runs Lua 5.1 with its own API, so a change still needs a look in the game. The widget stubs answer every method they do not know with nothing, so they cannot tell whether a frame looks right.
+
+`WoWMCP.lua` is the export, `Lists.lua` the window, tooltips and shopping lists. `Lists.lua` loads last and only reads `WoWMCP_AppData`, so a problem there cannot stop the export.
 
 Texts live in `Locales.lua`. English is the default; a language only lists what it translates. To add a language, add a block for its `GetLocale()` code.
 

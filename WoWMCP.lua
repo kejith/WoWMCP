@@ -1128,11 +1128,15 @@ SlashCmdList.WOWMCP = function(msg)
         if type(last) == "table" then
             print(L.statusRequest:format(tostring(last.id), tostring(last.action), at(last.done, "%H:%M") or L.running))
         end
+        if ns.listStatus then pcall(ns.listStatus) end
         for key, err in pairs(db.errors) do
             print(("  %s: %s"):format(key, err))
         end
+    elseif ns.commands and ns.commands[cmd] then
+        ns.commands[cmd](arg) -- the window and its switches, Lists.lua
     else
-        for _, key in ipairs({ "helpSync", "helpItems", "helpAuto", "helpStatus", "helpRecipes", "helpPayouts" }) do
+        for _, key in ipairs({ "helpSync", "helpItems", "helpAuto", "helpStatus", "helpShow", "helpLists", "helpTips",
+                               "helpAH", "helpRecipes", "helpPayouts" }) do
             say(key)
         end
     end

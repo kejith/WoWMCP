@@ -52,7 +52,7 @@ def lua_to_py(x):
 STUBS = r"""
 now, clock, locale, combat, money, favor = 1000, 1763400000, "enUS", false, 50000, 7
 timers, printed, counts = {}, {}, {}
-handler, registered, reloaded = nil, {}, false
+frames, postCalls, reloaded, modified = {}, {}, false, false
 
 function print(...) printed[#printed + 1] = table.concat({...}, " ") end
 function GetTime() return now end
@@ -90,14 +90,115 @@ function advance(seconds)
   now = target
 end
 
-function CreateFrame()
-  return {
-    RegisterEvent = function(_, event) registered[event] = true end,
-    UnregisterEvent = function(_, event) registered[event] = nil end,
-    SetScript = function(_, _, fn) handler = fn end,
-  }
+-- Widgets: frames, font strings and textures share one stub. It keeps what the tests look at (shown,
+-- text, scripts, events, slider value, check state) and answers every other widget method with nothing.
+local function nothing() end
+local widgetMeta = { __index = function(_, key)
+  if type(key) == "string" and key:match("^%u") then return nothing end
+end }
+function widget(kind, name, parent, template)
+  local w = { kind = kind, name = name, parent = parent, template = template, shown = true,
+              scripts = {}, hooks = {}, events = {}, points = {} }
+  function w:Show()
+    if not self.shown then
+      self.shown = true
+      if self.scripts.OnShow then self.scripts.OnShow(self) end
+    end
+  end
+  function w:Hide()
+    if self.shown then
+      self.shown = false
+      if self.scripts.OnHide then self.scripts.OnHide(self) end
+    end
+  end
+  function w:SetShown(on) if on then self:Show() else self:Hide() end end
+  function w:IsShown() return self.shown end
+  function w:SetText(text) self.text = text end
+  function w:GetText() return self.text end
+  function w:GetTextWidth() return #(self.text or "") * 7 end
+  function w:SetScript(what, fn) self.scripts[what] = fn end
+  function w:GetScript(what) return self.scripts[what] end
+  function w:HookScript(what, fn) self.hooks[what] = fn end
+  function w:RegisterEvent(event) self.events[event] = true end
+  function w:UnregisterEvent(event) self.events[event] = nil end
+  function w:CreateFontString() return widget("FontString", nil, self) end
+  function w:CreateTexture() return widget("Texture", nil, self) end
+  function w:SetTexture(texture) self.texture = texture end
+  function w:SetChecked(on) self.checked = on end
+  function w:GetChecked() return self.checked end
+  function w:SetEnabled(on) self.enabled = on end
+  function w:IsEnabled() return self.enabled ~= false end
+  function w:ClearAllPoints() self.points = {} end
+  function w:SetPoint(...) self.points[#self.points + 1] = { ... } end
+  function w:GetNumPoints() return #self.points end
+  function w:GetPoint() if self.points[1] then return "TOPLEFT", UIParent, "TOPLEFT", 300, -200 end end
+  function w:SetMinMaxValues(low, high) self.low, self.high = low, high end
+  function w:SetValue(value)
+    value = math.max(self.low or 0, math.min(self.high or 0, value))
+    if value ~= self.value then
+      self.value = value
+      if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, value) end
+    end
+  end
+  function w:GetValue() return self.value end
+  function w:LockHighlight() self.locked = true end
+  function w:UnlockHighlight() self.locked = false end
+  function w:Click() if self.scripts.OnClick and self:IsEnabled() then self.scripts.OnClick(self, "LeftButton") end end
+  if template == "UICheckButtonTemplate" then w.Text = widget("FontString", nil, w) end
+  return setmetatable(w, widgetMeta)
 end
-function fire(event, ...) if registered[event] then handler(nil, event, ...) end end
+function CreateFrame(kind, name, parent, template)
+  local f = widget(kind, name, parent, template)
+  frames[#frames + 1] = f
+  if name then _G[name] = f end
+  return f
+end
+-- Events reach every frame that registered for them, in the order the frames were created.
+function fire(event, ...)
+  for _, f in ipairs(frames) do
+    if f.events[event] and f.scripts.OnEvent then f.scripts.OnEvent(f, event, ...) end
+  end
+end
+UIParent, UISpecialFrames = widget("Frame", "UIParent"), {}
+
+-- Tooltips keep their lines; showing an item runs the hooks addons registered for item tooltips.
+local function tooltipStub(name)
+  local t = widget("GameTooltip", name)
+  t.lines = {}
+  function t:SetOwner() self.lines = {} end
+  function t:SetText(text) self.lines = { text } end
+  function t:AddLine(text) self.lines[#self.lines + 1] = text end
+  function t:GetItem() if self.item and items[self.item] then return items[self.item].name, link(self.item) end end
+  function t:SetItemByID(id)
+    self.item = id
+    self.lines = { items[id] and items[id].name or "?" }
+    for _, fn in ipairs(postCalls) do fn(self, { id = id, type = 0 }) end
+    if self.hooks.OnTooltipSetItem then self.hooks.OnTooltipSetItem(self) end
+  end
+  return t
+end
+GameTooltip, ItemRefTooltip, OtherTooltip = tooltipStub("GameTooltip"), tooltipStub("ItemRefTooltip"), tooltipStub("OtherTooltip")
+TooltipDataProcessor = { AddTooltipPostCall = function(_, fn) postCalls[#postCalls + 1] = fn end }
+
+ITEM_QUALITY_COLORS = {}
+for quality, hex in pairs({ [0] = "9d9d9d", [1] = "ffffff", [2] = "1eff00", [3] = "0070dd", [4] = "a335ee" }) do
+  ITEM_QUALITY_COLORS[quality] = { r = quality / 10, g = 1, b = 1, hex = "|cff" .. hex }
+end
+function GetMoneyString(copper)
+  return ("%dg %ds %dc"):format(copper // 10000, copper // 100 % 100, copper % 100)
+end
+function IsModifiedClick() return modified end
+linked = {}
+function HandleModifiedItemClick(itemLink) linked[#linked + 1] = itemLink end
+
+-- The auction house and Auctionator's API for other addons. Shopping lists live in `shopping`, as they
+-- do in Auctionator's SavedVariables: they survive a /reload.
+AuctionHouseFrame = { shown = false, searched = {}, SearchBar = {} }
+function AuctionHouseFrame:IsShown() return self.shown end
+function AuctionHouseFrame:SetSearchText(text) self.text = text return true end
+function AuctionHouseFrame.SearchBar:StartSearch() table.insert(AuctionHouseFrame.searched, AuctionHouseFrame.text) end
+AuctionatorTabs_Shopping = {}
+shopping, created, searches = {}, 0, {}
 
 C_AddOns = { GetAddOnMetadata = function() return VERSION end }
 C_UI = { Reload = function() reloaded = true end }
@@ -159,7 +260,8 @@ C_Item = {
   GetItemStats = function() return { ITEM_MOD_INTELLECT_SHORT = 10, nested = {} } end,
   GetItemNameByID = function(id) return items[id] and items[id].name end,
   GetItemCount = function(id) return counts[id] or 0 end,
-  RequestLoadItemDataByID = function(id) items[id].loaded = true end,
+  RequestLoadItemDataByID = function(id) if items[id] then items[id].loaded = true end end,
+  GetItemIconByID = function(id) return items[id] and 130000 + id or nil end,
 }
 local function tooltip(id)
   return { lines = {
@@ -178,7 +280,8 @@ function GetInventoryItemLink(_, slot) if slot == 1 then return link(1001) end e
 function GetInventoryItemID(_, slot) if slot == 1 then return 1001 end end
 function GetInventoryItemDurability(slot) return 30, 40 end
 
-Enum = { BagIndex = { Backpack = 0, Bag_1 = 1, Bank = -1, BankBag_1 = 5, AccountBankTab_1 = 13 } }
+Enum = { BagIndex = { Backpack = 0, Bag_1 = 1, Bank = -1, BankBag_1 = 5, AccountBankTab_1 = 13 },
+         TooltipDataType = { Item = 0 } }
 containers = {
   [0] = { name = "Backpack", size = 16, slots = { [1] = { 2447, 20 }, [2] = { 284583, 1 } } },
   [5] = { name = "Bank Bag", size = 8, slots = { [3] = { 118, 5 } } },
@@ -257,6 +360,37 @@ Auctionator = { Constants = { SCAN_DAY_0 = day0 }, Database = { db = {
   ["1001"] = { h = { ["100"] = 5 } }, ["1002"] = { h = { ["100"] = 5 } },
   ["1003"] = { h = { ["70"] = 5 } }, ["2447"] = { h = { ["100"] = 5 } }, ["g:1:2"] = { h = { ["100"] = 5 } },
 } } }
+local function checked(caller, term)
+  assert(type(caller) == "string" and caller ~= "", "caller ID")
+  assert(type(term.searchString) == "string", "searchString")
+  for _, value in pairs(term) do
+    assert(type(value) ~= "string" or not (value:find("[;^]") or value:find('^".*"$')), "bad search term")
+  end
+  return term
+end
+Auctionator.API = { v1 = {
+  ConvertToSearchString = function(caller, term)
+    checked(caller, term)
+    return ('"%s";%s;%s'):format(term.searchString, term.categoryKey or "", tostring(term.quantity or ""))
+  end,
+  CreateShoppingList = function(caller, name, strings)
+    assert(type(caller) == "string" and type(name) == "string" and type(strings) == "table")
+    shopping[name] = strings
+    created = created + 1
+  end,
+  MultiSearchAdvanced = function(caller, terms)
+    local names = {}
+    for i, term in ipairs(terms) do
+      checked(caller, term)
+      names[i] = term.searchString .. (term.quantity and (" x" .. term.quantity) or "") .. (term.isExact and "" or " ~")
+    end
+    searches[#searches + 1] = names
+  end,
+} }
+Auctionator.Shopping = { ListManager = {
+  GetIndexForName = function(_, name) return shopping[name] and 1 or nil end,
+  Delete = function(_, name) shopping[name] = nil end,
+} }
 """
 
 
@@ -268,19 +402,22 @@ def new_runtime(locale="enUS"):
     return lua
 
 
-def load_addon(lua, request=None, enter=True):
-    """Runs the files of the .toc like the client does on login or /reload: in order, sharing one table."""
+def load_addon(lua, request=None, enter=True, data=None):
+    """Runs the files of the .toc like the client does on login or /reload: in order, sharing one table.
+    `request` and `data` are what the desktop app wrote into AppRequest.lua and AppData.lua (Lua source)."""
     load = lua.eval("function(src, name) return assert(load(src, name)) end")
-    lua.execute("timers, registered, handler = {}, {}, nil")
+    lua.execute("timers, frames, postCalls = {}, {}, {}")
     ns = lua.table()
     for name in toc()[1]:
         if name == "AppRequest.lua":
             lua.execute(f"WoWMCP_AppRequest = {request or 'nil'}")
+        elif name == "AppData.lua":
+            lua.execute(f"WoWMCP_AppData = {data or 'nil'}")
         else:
             load(read(name), name)(NAME, ns)
     lua.execute('fire("ADDON_LOADED", "WoWMCP")')
     if enter:
-        lua.execute('fire("PLAYER_ENTERING_WORLD", true, false); advance(4)')
+        lua.execute('fire("PLAYER_LOGIN"); fire("PLAYER_ENTERING_WORLD", true, false); advance(4)')
     return ns
 
 
@@ -457,6 +594,322 @@ def test_app_requests():
     print("ok test_app_requests")
 
 
+# What the desktop app writes into AppData.lua: three lists for Tester, one for another character.
+def app_data(hash_="h1", writ_shop="true", extra=""):
+    many = "".join(f'{{ id = {5000 + i}, name = "Filler {i}", price = {i} }}, ' for i in range(30))  # Filler 0 costs nothing
+    return f"""{{ version = 1, generated = 1763400500, hash = "{hash_}", locale = "enUS", scanDate = "2026-11-18", chars = {{
+      Tester = {{ level = 46,
+        lists = {{
+          {{ key = "upgrades", title = "AH upgrades", note = "Budget {{m:150000}}", sections = {{
+            {{ title = "Best package", note = "+12.5 points for {{m:90000}}", rows = {{
+              {{ id = 1001, name = "Sent Hat Name", q = 2, info = "Head +12.5", price = 90000, shop = true }},
+              {{ id = 1002, name = "Staff of Waiting", q = 3, info = "Staff +3.0", price = 12345, shop = true }} }} }},
+            {{ title = "Head", note = "now: Old Hat", rows = {{
+              {{ id = 1001, name = "Sent Hat Name", q = 2, info = "+12.5", price = 90000 }},
+              "junk", {{ name = "no id" }},
+              {{ id = 1003, name = "Old Boots", info = "+1.0", price = 100 }} }} }},
+            "not a section" }} }},
+          {{ key = "writs", title = "Writs", sections = {{ {{ title = "Journeyman", rows = {{
+              {{ id = 264012, name = "Writ: Elixir || Wisdom", q = 1, info = "net {{m:-500}}", price = 5000, shop = {writ_shop} }},
+              {{ id = 2447, name = "Friedensblume", n = 20, price = 400, shop = {writ_shop}, sub = true }},
+              {{ id = 7777, name = "Bad;Name", shop = {writ_shop} }},
+              {many} }} }} }} }},
+          {{ key = "look", title = "Nothing to buy", sections = {{ {{ title = "Potions", rows = {{
+              {{ id = 118, name = "Minor Healing Potion" }} }} }} }} }},
+          {{ key = "broken", sections = "x" }}, 5,
+        }},
+        tips = {{ [1001] = {{ "Upgrade for Head: +12.5 points ({{m:90000}})", "Part of the best package", 7 }}, [118] = "x" }},
+        vendor = {{ [9300] = "Teaches Elixir: profit {{m:3000}} per craft", [3371] = false }},
+      }},
+      Other = {{ lists = {{ {{ key = "x", title = "Not mine", sections = {{}} }} }} }},
+      {extra}
+    }} }}"""
+
+
+def window(lua):
+    return lua.globals().WoWMCPListFrame
+
+
+def visible(lua):
+    """The rows on screen: ("head", title, note) or ("item", name, info, price)."""
+    out = []
+    for line in lua_to_py_list(window(lua).rows):
+        if not line.shown:
+            continue
+        if line.head.shown:
+            out.append(("head", line.head.text, line.note.text))
+        else:
+            out.append(("item", line.name.text, line.info.text, line.price.text))
+    return out
+
+
+def lua_to_py_list(table):
+    return [table[i] for i in range(1, len(table) + 1)]
+
+
+def tabs(lua):
+    return [(t.text, bool(t.locked)) for t in lua_to_py_list(window(lua).tabs) if t.shown]
+
+
+def slash(lua, text):
+    lua.globals().SlashCmdList.WOWMCP(text)
+
+
+def click(widget):
+    widget.Click(widget)
+
+
+def test_lists_window():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    assert window(lua) is None, "the window is built when it is first needed"
+    assert account(lua)["appData"] == {"generated": 1763400500, "hash": "h1", "loaded": lua.eval("time()") - 4}
+    slash(lua, "show")
+    w = window(lua)
+    assert w.shown and "WoWMCPListFrame" in lua_to_py(lua.globals().UISpecialFrames)
+    assert tabs(lua) == [("AH upgrades", True), ("Writs", False), ("Nothing to buy", False)], "broken lists are skipped"
+    assert w.note.text == "Budget 15g 0s 0c" and "2026-11-18" in w.sub.text and w.empty.text == ""
+    assert visible(lua) == [
+        ("head", "Best package", "+12.5 points for 9g 0s 0c"),
+        # The game's name wins over the one the app sent; * marks the shopping list.
+        ("item", "|cffffd100*|r Hat of Testing", "Head +12.5", "9g 0s 0c"),
+        ("item", "|cffffd100*|r Staff of Waiting", "Staff +3.0", "1g 23s 45c"),
+        ("head", "Head", "now: Old Hat"),
+        ("item", "Hat of Testing", "+12.5", "9g 0s 0c"),
+        ("item", "Old Boots", "+1.0", "0g 1s 0c"),
+    ], visible(lua)
+    assert w.rows[2].icon.texture == 131001 and not w.slider.shown and w.buy.enabled
+
+    # The second tab has more rows than fit: scrolling by wheel and by slider.
+    click(w.tabs[2])
+    assert tabs(lua)[1] == ("Writs", True) and account(lua)["ui"]["tab"] == "writs"
+    rows = visible(lua)
+    assert len(rows) == 16 and rows[0] == ("head", "Journeyman", "") and w.slider.shown and w.slider.high == 34 - 16
+    # An item the client does not know keeps the name the app sent, with its escaped "|".
+    assert rows[1] == ("item", "|cffffd100*|r Writ: Elixir || Wisdom", "net -0g 5s 0c", "0g 50s 0c")
+    assert rows[2][1] == "|cffffd100*|r Peacebloom |cffffffffx20|r"
+    w.scripts.OnMouseWheel(w, -1)
+    assert visible(lua)[1] == ("item", "Filler 0", "", "") and w.slider.value == 3
+    w.slider.SetValue(w.slider, 18)
+    assert visible(lua)[-1][1] == "Filler 29" and len(visible(lua)) == 16
+    w.scripts.OnMouseWheel(w, -5)
+    assert visible(lua)[-1][1] == "Filler 29", "scrolling stops at the end"
+    w.scripts.OnMouseWheel(w, 50)
+    assert visible(lua)[0] == ("head", "Journeyman", "")
+
+    # The tab is remembered, also over a /reload; a list without anything to buy disables the button.
+    slash(lua, "show")
+    assert not w.shown
+    load_addon(lua, data=app_data())
+    slash(lua, "show")
+    assert tabs(lua)[1] == ("Writs", True)
+    click(window(lua).tabs[3])
+    assert visible(lua) == [("head", "Potions", ""), ("item", "Minor Healing Potion", "", "")]
+    assert window(lua).buy.enabled is False
+
+    # Dragging saves the position; the next opening uses it.
+    w = window(lua)
+    w.scripts.OnDragStop(w)
+    assert account(lua)["ui"]["point"] == ["TOPLEFT", "TOPLEFT", 300, -200]
+    slash(lua, "status")
+    assert any("lists from the app: 3, computed" in line for line in printed(lua)), printed(lua)
+    print("ok test_lists_window")
+
+
+def test_lists_search():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    slash(lua, "show")
+    w = window(lua)
+    click(w.rows[2])
+    assert printed(lua)[-1].endswith("open the auction house first.") and not lua_to_py(lua.globals().searches)
+
+    lua.execute("AuctionHouseFrame.shown = true; fire('AUCTION_HOUSE_SHOW')")
+    click(w.rows[2])
+    click(w.rows[1].search)   # the section "Best package"
+    click(w.buy)
+    click(w.tabs[2])
+    click(w.buy)              # a name Auctionator cannot take is left out
+    assert lua_to_py(lua.globals().searches) == [
+        ["Hat of Testing"], ["Hat of Testing", "Staff of Waiting"], ["Hat of Testing", "Staff of Waiting"],
+        ["Writ: Elixir | Wisdom", "Peacebloom x20"]], lua_to_py(lua.globals().searches)
+
+    # Shift-click hands the game a link: the client puts it into the chat or the auction house search.
+    lua.execute("modified = true")
+    click(w.rows[2])
+    click(w.rows[3])
+    lua.execute("modified = false")
+    links = lua_to_py(lua.globals().linked)
+    assert "|Hitem:264012:" in links[0] and "[Writ: Elixir | Wisdom]" in links[0] and links[0].startswith("|cffffffff")
+    assert links[1] == lua.eval("link(2447)") and len(lua_to_py(lua.globals().searches)) == 4
+
+    # The tooltip of a row: the item, what the list says about it, and how to use the row.
+    click(w.tabs[1])
+    w.rows[2].scripts.OnEnter(w.rows[2])
+    tip = lua_to_py(lua.globals().GameTooltip.lines)
+    assert tip[0] == "Hat of Testing" and "Head +12.5" in tip and "On the shopping list" in tip, tip
+    assert "Upgrade for Head: +12.5 points (9g 0s 0c)" in tip and tip[-1].startswith("Click: search")
+
+    # Without Auctionator one item goes into Blizzard's search bar; several cannot be searched.
+    lua.execute("Auctionator.API = nil")
+    click(w.rows[2])
+    assert lua_to_py(lua.globals().AuctionHouseFrame.searched) == ["Hat of Testing"]
+    click(w.buy)
+    assert printed(lua)[-1].endswith("needs Auctionator.") and len(lua_to_py(lua.globals().searches)) == 4
+    print("ok test_lists_search")
+
+
+def test_lists_open_with_the_auction_house():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    lua.execute("AuctionHouseFrame.shown = true; fire('AUCTION_HOUSE_SHOW')")
+    w = window(lua)
+    assert w.shown and w.auto.checked is True
+    lua.execute("AuctionHouseFrame.shown = false; fire('AUCTION_HOUSE_CLOSED')")
+    assert not w.shown, "what opened with the auction house closes with it"
+    slash(lua, "show")
+    lua.execute("fire('AUCTION_HOUSE_SHOW'); fire('AUCTION_HOUSE_CLOSED')")
+    assert w.shown, "a window the player opened stays"
+    w.Hide(w)
+    w.auto.checked = False
+    click(w.auto)
+    assert account(lua)["ui"]["ah"] is False
+    lua.execute("fire('AUCTION_HOUSE_SHOW')")
+    assert not w.shown
+    slash(lua, "ah on")
+    assert printed(lua)[-1].endswith("is on (/wowmcp ah on|off)")
+    lua.execute("fire('AUCTION_HOUSE_SHOW')")
+    assert w.shown
+    print("ok test_lists_open_with_the_auction_house")
+
+
+def test_shopping_lists():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    assert not lua_to_py(lua.globals().shopping), "Auctionator gets time to load its lists first"
+    lua.execute("advance(2)")
+    lists = lua_to_py(lua.globals().shopping)
+    assert lists == {
+        "WoWMCP: AH upgrades": ['"Hat of Testing";;', '"Staff of Waiting";;'],
+        "WoWMCP: Writs": ['"Writ: Elixir | Wisdom";;', '"Peacebloom";;20'],
+    }, lists
+    assert printed(lua)[-1].endswith("2 Auctionator shopping lists updated.")
+    assert account(lua)["ui"]["synced"] == "h1:Tester"
+
+    # The same file after a /reload: the lists are left alone, also what the player changed in them.
+    load_addon(lua, data=app_data())
+    lua.execute("advance(2)")
+    assert lua.globals().created == 2
+    # New data without anything to buy for the writs: that list goes, the other is written again.
+    load_addon(lua, data=app_data("h2", writ_shop="false"))
+    lua.execute("advance(2)")
+    assert list(lua_to_py(lua.globals().shopping)) == ["WoWMCP: AH upgrades"] and lua.globals().created == 3
+
+    slash(lua, "lists off")
+    assert not lua_to_py(lua.globals().shopping) and printed(lua)[-1].endswith("are off (/wowmcp lists on|off)")
+    load_addon(lua, data=app_data("h3"))
+    lua.execute("advance(2)")
+    assert not lua_to_py(lua.globals().shopping)
+    slash(lua, "lists on")
+    assert len(lua_to_py(lua.globals().shopping)) == 2
+
+    # Not while the auction house is open (Auctionator would start searching), but when it closes.
+    lua = new_runtime()
+    lua.execute("AuctionHouseFrame.shown = true")
+    load_addon(lua, data=app_data())
+    lua.execute("advance(2)")
+    assert not lua_to_py(lua.globals().shopping)
+    lua.execute("AuctionHouseFrame.shown = false; fire('AUCTION_HOUSE_CLOSED')")
+    assert len(lua_to_py(lua.globals().shopping)) == 2
+
+    # Without Auctionator's API nothing happens and nothing is remembered as done.
+    lua = new_runtime()
+    lua.execute("Auctionator.API = nil")
+    load_addon(lua, data=app_data())
+    lua.execute("advance(2)")
+    assert "synced" not in account(lua)["ui"]
+    print("ok test_shopping_lists")
+
+
+def test_tooltip_lines_and_vendor_hints():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+
+    def tip(name, item):
+        lua.execute(f"{name}:SetItemByID({item})")
+        return lua_to_py(lua.globals()[name].lines)
+
+    assert tip("GameTooltip", 1001) == ["Hat of Testing", "Upgrade for Head: +12.5 points (9g 0s 0c)",
+                                        "Part of the best package"]
+    assert len(tip("ItemRefTooltip", 1001)) == 3
+    assert tip("OtherTooltip", 1001) == ["Hat of Testing"], "only the item tooltips of the game"
+    assert tip("GameTooltip", 1003) == ["Old Boots"] and tip("GameTooltip", 118) == ["Minor Healing Potion"]
+    slash(lua, "tips off")
+    assert tip("GameTooltip", 1001) == ["Hat of Testing"]
+    slash(lua, "tips on")
+    assert len(tip("GameTooltip", 1001)) == 3
+
+    # A merchant who sells an item the app has a note for: one chat line, not again on every visit.
+    lua.execute("fire('MERCHANT_SHOW')")
+    hints = [line for line in printed(lua) if "Teaches Elixir" in line]
+    assert len(hints) == 1 and "|Hitem:9300:" in hints[0] and hints[0].endswith("profit 0g 30s 0c per craft"), hints
+    lua.execute("advance(60); fire('MERCHANT_SHOW')")
+    assert len([line for line in printed(lua) if "Teaches Elixir" in line]) == 1
+    lua.execute("advance(300); fire('MERCHANT_SHOW')")
+    assert len([line for line in printed(lua) if "Teaches Elixir" in line]) == 2
+
+    # A client without the tooltip data API: the hook on the tooltip itself.
+    lua = new_runtime()
+    lua.execute("TooltipDataProcessor = nil")
+    load_addon(lua, data=app_data())
+    assert len(tip("GameTooltip", 1001)) == 3 and tip("GameTooltip", 1003) == ["Old Boots"]
+    print("ok test_tooltip_lines_and_vendor_hints")
+
+
+def test_lists_without_or_with_bad_data():
+    # Nothing sent yet, data for someone else only, and files that are not what the addon expects.
+    cases = {
+        "nil": "No lists for Tester yet",
+        '{ chars = { Other = { lists = {} } } }': "No lists for Tester yet",
+        '"text"': "No lists for Tester yet",
+        '{ chars = 5 }': "No lists for Tester yet",
+        '{ generated = "x", hash = 5, chars = { Tester = { lists = "x", tips = 5, vendor = true } } }': "No lists for Tester yet",
+        '{ chars = { Tester = { lists = { { title = "T", sections = { { rows = "x" }, { title = 5, rows = { {} } } } } }, '
+        'tips = { [1001] = 5 }, vendor = { [9300] = {} } } } }': "",
+    }
+    for data, empty in cases.items():
+        lua = new_runtime()
+        load_addon(lua, data=data)
+        lua.execute("advance(10); AuctionHouseFrame.shown = true; fire('AUCTION_HOUSE_SHOW'); fire('MERCHANT_SHOW')")
+        lua.execute("GameTooltip:SetItemByID(1001)")
+        assert lua_to_py(lua.globals().GameTooltip.lines) == ["Hat of Testing"], data
+        if empty:
+            assert window(lua) is None, f"no window with the auction house without lists: {data}"
+            slash(lua, "show")
+        w = window(lua)
+        assert w.shown and w.empty.text.startswith(empty) and (empty == "") == bool(tabs(lua)), data
+        click(w.buy)
+        for cmd in ("lists on", "lists off", "tips", "ah", "status"):
+            slash(lua, cmd)
+        assert char(lua)["errors"] == {} and not lua_to_py(lua.globals().shopping), data
+    lua = new_runtime()
+    load_addon(lua, data="nil")
+    assert "appData" not in account(lua), "nothing loaded, nothing to report to the app"
+    print("ok test_lists_without_or_with_bad_data")
+
+
+def test_lists_in_german():
+    lua = new_runtime("deDE")
+    load_addon(lua, data=app_data())
+    slash(lua, "show")
+    w = window(lua)
+    assert w.rows[1].search.text == "Suchen" and w.buy.text == "Einkaufsliste suchen" and w.auto.Text.text == "Mit dem Auktionshaus öffnen"
+    assert w.sub.text.startswith("AH-Scan 2026-11-18, berechnet ")
+    lua.execute("advance(2)")
+    assert printed(lua)[-1].endswith("2 Auctionator-Einkaufslisten aktualisiert.")
+    print("ok test_lists_in_german")
+
+
 def test_locales():
     # A translation may only use keys that exist in English, with the same placeholders.
     texts = {}
@@ -468,8 +921,9 @@ def test_locales():
     for key, text in texts["enUS"].items():
         assert re.findall(r"%\.?\d*[dsf]", text) == re.findall(r"%\.?\d*[dsf]", texts["deDE"][key]), key
     # Every text the code asks for exists.
-    code = read("WoWMCP.lua")
-    used = set(re.findall(r"\bL\.(\w+)", code)) | set(re.findall(r'say\("(\w+)"', code)) | set(re.findall(r'"(help\w+)"', code))
+    code = read("WoWMCP.lua") + read("Lists.lua")
+    used = (set(re.findall(r"\bL\.(\w+)", code)) | set(re.findall(r'say\("(\w+)"', code))
+            | set(re.findall(r'"(help\w+|\w+State)"', code)))
     assert used and used <= set(texts["enUS"]), used - set(texts["enUS"])
     assert set(texts["enUS"]) <= used, f"unused texts: {set(texts['enUS']) - used}"
 
@@ -483,13 +937,16 @@ def test_locales():
     assert "letzter Snapshot" in out and "Bank: nie gescannt" in out and "ist an (/wowmcp auto on|off)" in out, out
     assert "Münzbeutel 284583: 1x geöffnet, Schnitt 33.50s" in out, out
     assert "lese 2 neue Items" in out and "/wowmcp sync - Snapshot und /reload" in out, out
+    assert "/wowmcp show - die Listen der App" in out and "Listen der App: keine" in out, out
     print("ok test_locales")
 
 
 def test_toc():
     fields, files = toc()
     assert fields["Interface"] == "16001" and re.fullmatch(r"\d+\.\d+\.\d+", fields["Version"]), fields
-    assert files and files[-1] == f"{NAME}.lua"
+    # The data files come first, the texts before the code, and the window after the export.
+    order = ["AppRequest.lua", "AppData.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua"]
+    assert [f for f in files if f in order] == order and "WoWMCP_Account" in fields["SavedVariables"], files
     for name in files:
         assert os.path.isfile(os.path.join(ROOT, name)), f"{name} is listed in the .toc but missing"
     for name in os.listdir(ROOT):
@@ -505,5 +962,12 @@ if __name__ == "__main__":
     test_recipes_and_vendor()
     test_item_export()
     test_app_requests()
+    test_lists_window()
+    test_lists_search()
+    test_lists_open_with_the_auction_house()
+    test_shopping_lists()
+    test_tooltip_lines_and_vendor_hints()
+    test_lists_without_or_with_bad_data()
+    test_lists_in_german()
     test_locales()
     test_toc()
