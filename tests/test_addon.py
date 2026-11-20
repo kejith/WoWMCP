@@ -243,7 +243,28 @@ C_Map = {
   GetMapInfo = function() return { name = "Orgrimmar" } end,
   GetPlayerMapPosition = function() return { GetXY = function() return 0.5, 0.254 end } end,
 }
-C_SpellBook = { IsSpellKnown = function(id) return id == 1456 end }
+-- The spellbook: a class page, a general page and a guild page; one spell is only a "future"
+-- (level-gated, not learned) entry, one is passive.
+C_SpellBook = {
+  IsSpellKnown = function(id) return id == 1456 end,
+  GetNumSpellBookSkillLines = function() return 3 end,
+  GetSpellBookSkillLineInfo = function(i)
+    if i == 1 then return { name = "General", itemIndexOffset = 0, numSpellBookItems = 2 } end
+    if i == 2 then return { name = "Affliction", itemIndexOffset = 2, numSpellBookItems = 3 } end
+    return { name = "Guild", itemIndexOffset = 5, numSpellBookItems = 1, isGuild = true }
+  end,
+  GetSpellBookItemInfo = function(slot, bank)
+    local book = {
+      { spellID = 6603, itemType = 1, name = "Attack", subName = "" },
+      { spellID = 1454, itemType = 1, name = "Life Tap", subName = "Rank 1" },
+      { spellID = 686, itemType = 1, name = "Shadow Bolt", subName = "Rank 3" },
+      { spellID = 695, itemType = 2, name = "Shadow Bolt", subName = "Rank 4" },
+      { spellID = 132, itemType = 1, name = "Inner Armor", subName = "Passive", isPassive = true },
+      { spellID = 99999, itemType = 1, name = "Guild Banner", subName = "" },
+    }
+    return book[slot]
+  end,
+}
 C_Spell = {
   GetSpellDescription = function() return "Converts 310 health into 310 mana." end,
   GetSpellName = function(id) return "Spell " .. id end,
@@ -487,6 +508,14 @@ def test_snapshot():
     assert (rep["id"], rep["category"], rep["standing"], rep["value"], rep["max"]) == (76, "Horde", "Friendly", 4000, 9000)
     assert c["skills"]["professions"][0] == {"name": "Alchemy", "rank": 150, "max": 225, "skillLine": 171}
     assert c["currencies"] == {3402: {"name": "Merchant's Favor", "quantity": 7}}
+
+    book = c["spellbook"]
+    assert book["count"] == 4 and set(book["spells"]) == {6603, 1454, 686, 132}
+    assert book["spells"][686] == {"name": "Shadow Bolt", "rank": "Rank 3",
+                                   "text": "Converts 310 health into 310 mana."}
+    assert book["spells"][132]["passive"] is True
+    assert 695 not in book["spells"], "a future (level-gated) spell is not learned"
+    assert 99999 not in book["spells"], "the guild page is not the character's book"
     print("ok test_snapshot")
 
 

@@ -1,9 +1,9 @@
 ## Interface: 16001
 ## Title: WoWMCP
-## Notes: Exports character, inventory, bank, quests, reputation, skills, talents, profession recipes, vendor prices, writ and crate payouts and auction house item stats to SavedVariables for the desktop app and MCP server of wow-forever-tools, and shows the app's results in the game: lists for the auction house, tooltip lines and vendor hints, plus the price history of any item Auctionator has scanned.
-## Notes-deDE: Exportiert Charakter, Inventar, Bank, Quests, Ruf, Fertigkeiten, Talente, Berufsrezepte, Händlerpreise, Auszahlungen von Verfügungen und Handelskisten sowie Werte von Auktionshaus-Items in die SavedVariables, für die Desktop-App und den MCP-Server von wow-forever-tools, und zeigt die Ergebnisse der App im Spiel: Listen fürs Auktionshaus, Tooltip-Zeilen und Händlerhinweise, dazu den Preisverlauf jedes von Auctionator gescannten Items.
+## Notes: Exports character, inventory, bank, quests, reputation, skills, talents, spellbook, profession recipes, vendor prices, writ and crate payouts and auction house item stats to SavedVariables for the desktop app and MCP server of wow-forever-tools, and shows the app's results in the game: lists for the auction house, tooltip lines and vendor hints, plus the price history of any item Auctionator has scanned.
+## Notes-deDE: Exportiert Charakter, Inventar, Bank, Quests, Ruf, Fertigkeiten, Talente, Zauberbuch, Berufsrezepte, Händlerpreise, Auszahlungen von Verfügungen und Handelskisten sowie Werte von Auktionshaus-Items in die SavedVariables, für die Desktop-App und den MCP-Server von wow-forever-tools, und zeigt die Ergebnisse der App im Spiel: Listen fürs Auktionshaus, Tooltip-Zeilen und Händlerhinweise, dazu den Preisverlauf jedes von Auctionator gescannten Items.
 ## Author: Kejith
-## Version: 1.10.0
+## Version: 1.11.0
 ## X-Website: https://github.com/kejith/WoWMCP
 ## OptionalDeps: Auctionator
 ## SavedVariables: WoWMCP_Account, WoWMCP_Items

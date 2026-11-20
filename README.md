@@ -74,7 +74,7 @@ Auctionator keeps 21 days by default (its option "price history days"). The name
 
 | Variable | File | Content |
 | --- | --- | --- |
-| `WoWMCP_Char` | per character, `WTF\Account\<account>\<realm>\<name>\SavedVariables\WoWMCP.lua` | `character` (level, gold, zone, stats), `equipment` with tooltips, `bags`, `bank`, `quests`, `completedQuests`, `reputation`, `skills`, `talents`, `currencies`, `recipes` per profession, `errors`, `client` (`version`, `build`, `interface`, `locale`), `addon.version`, `updated` |
+| `WoWMCP_Char` | per character, `WTF\Account\<account>\<realm>\<name>\SavedVariables\WoWMCP.lua` | `character` (level, gold, zone, stats), `equipment` with tooltips, `bags`, `bank`, `quests`, `completedQuests`, `reputation`, `skills`, `talents`, `spellbook` (since 1.11: every learned spell with its rank line and description; future level-gated spells, guild and off-spec pages are left out), `currencies`, `recipes` per profession, `errors`, `client` (`version`, `build`, `interface`, `locale`), `addon.version`, `updated` |
 | `WoWMCP_Items` | account, `WTF\Account\<account>\SavedVariables\WoWMCP.lua` | item export: `items[id] = {name, quality, ilvl, reqLevel, equipLoc, classID, subclassID, bind, stats, tooltip, tipColors}`, incremental per client build and language (`build`, `locale`) |
 | `WoWMCP_Account` | account, same file | `autoItems`, `lastRequest`, `vendor[itemID]` (vendor prices in copper), `payouts` (measured content of coin pouches, Merchant's Favor per trade crate), `appData` (which `AppData.lua` the game loaded), `ui` (settings, position and size of the list window) |
 

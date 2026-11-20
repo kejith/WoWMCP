@@ -740,6 +740,47 @@ local function collectCurrencies()
 end
 
 ---------------------------------------------------------------------------------------------------
+-- Spellbook (since 1.11): every spell the character knows, with its rank line and description.
+-- The app's combat engine prefers this over assuming that every trainer rank is known; the
+-- description's resolved numbers also serve as ground truth for the engine's spell data.
+---------------------------------------------------------------------------------------------------
+
+local function collectSpellbook()
+    local book = C_SpellBook
+    if not (book and book.GetNumSpellBookSkillLines and book.GetSpellBookSkillLineInfo
+            and book.GetSpellBookItemInfo) then
+        return nil
+    end
+    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+    local spellType = Enum.SpellBookItemType and Enum.SpellBookItemType.Spell or 1
+    local spells, count = {}, 0
+    for lineIndex = 1, try(book.GetNumSpellBookSkillLines) or 0 do
+        local line = try(book.GetSpellBookSkillLineInfo, lineIndex)
+        -- Guild and off-spec pages are not the character's own book.
+        if line and not line.isGuild and not line.offSpecID then
+            local offset, n = num(line.itemIndexOffset) or 0, num(line.numSpellBookItems) or 0
+            for slot = offset + 1, offset + n do
+                local item = try(book.GetSpellBookItemInfo, slot, bank)
+                -- Only learned spells: future (level-gated) spells, flyouts and pet actions are skipped.
+                if item and item.spellID and item.itemType == spellType then
+                    spells[item.spellID] = {
+                        name = str(item.name),
+                        -- "Rank 4" in the client's language; may still be empty right after
+                        -- loading (SPELL_TEXT_UPDATE), the next snapshot fills it.
+                        rank = str(item.subName),
+                        text = str(try(C_Spell.GetSpellDescription, item.spellID)),
+                        passive = item.isPassive and true or nil,
+                    }
+                    count = count + 1
+                end
+            end
+        end
+    end
+    if count == 0 then return nil end
+    return { updated = time(), count = count, spells = spells }
+end
+
+---------------------------------------------------------------------------------------------------
 -- Snapshot scheduling
 ---------------------------------------------------------------------------------------------------
 
@@ -752,6 +793,7 @@ local SECTIONS = {
     reputation = collectReputation,
     skills = collectSkills,
     talents = collectTalents,
+    spellbook = collectSpellbook,
     currencies = collectCurrencies,
 }
 
