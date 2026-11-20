@@ -993,6 +993,16 @@ def day_text(lua, day, fmt="%m/%d"):
 
 def test_price_history():
     lua = new_runtime()
+    # 6000 is not in the client's files (no name without the server), but the item export has it; 6001 the
+    # server never names.
+    lua.execute("""items[6000] = { name = "Robe of Export", equipLoc = "", classID = 4, noName = true }
+                   items[6001] = { name = "Nameless", equipLoc = "", classID = 7, noName = true }
+                   Auctionator.Database.db["6000"] = { m = 900, h = { ["100"] = 900 } }
+                   Auctionator.Database.db["6001"] = { m = 10, h = { ["100"] = 10 } }
+                   WoWMCP_Items = { build = 70938, locale = "enUS", items = { [6000] = { name = "Robe of Export", quality = 3 } } }
+                   requested = {}
+                   local request = C_Item.RequestLoadItemDataByID
+                   C_Item.RequestLoadItemDataByID = function(id) requested[id] = (requested[id] or 0) + 1; request(id) end""")
     load_addon(lua, data=app_data())
     slash(lua, "price")
     w = window(lua)
@@ -1004,7 +1014,8 @@ def test_price_history():
 
     # Any case; one hit opens itself.
     type_in(lua, "PEACE")
-    assert results(lua) == ["|cff1eff00Peacebloom|r"] and h.status.text == "1 items", results(lua)
+    assert results(lua) == ["|cff1eff00Peacebloom|r"], results(lua)
+    assert h.status.text == "1 items · loading 2 names from the server", h.status.text
     assert h.title.text == "|cff1eff00Peacebloom|r" and h.item.shown
     assert h.summary.text == f"Last seen {day_text(lua, 100)} at 0g 3s 60c", h.summary.text
     stats = h.change.text
@@ -1030,10 +1041,10 @@ def test_price_history():
 
     # Every word must be in the name; shorter names first.
     type_in(lua, "of t")
-    assert results(lua) == ["|cff1eff00Hat of Testing|r", "|cff1eff00Staff of Waiting|r"], results(lua)
-    assert h.status.text == "2 items"
-    click(h.rows[2])
-    assert h.title.text.endswith("Staff of Waiting|r") and h.rows[2].locked and not h.rows[1].locked
+    assert results(lua) == ["|cff1eff00Hat of Testing|r", "|cff0070ddRobe of Export|r", "|cff1eff00Staff of Waiting|r"], results(lua)
+    assert h.status.text.startswith("3 items")
+    click(h.rows[3])
+    assert h.title.text.endswith("Staff of Waiting|r") and h.rows[3].locked and not h.rows[1].locked
     assert h.change.text.startswith("1 scan days") and h.change.text.endswith("change ±0%"), h.change.text
     type_in(lua, "#2447")
     assert h.title.text == "|cff1eff00Peacebloom|r"
@@ -1046,6 +1057,23 @@ def test_price_history():
     type_in(lua, "")
     assert h.status.text == "recently viewed" and len(results(lua)) == 3 and "Hat of Testing" in results(lua)[0]
     assert account(lua)["ui"]["historyRecent"] == [1001, 2447, 1002], account(lua)["ui"]["historyRecent"]
+
+    # The name from the item export (above with the export's quality) is there at once: the loader does not
+    # ask the server for it, only opening the item does.
+    type_in(lua, "robe")
+    assert results(lua) == ["|cff1eff00Robe of Export|r"] and h.title.text.endswith("Robe of Export|r"), results(lua)
+    asked = lambda: {i: lua_to_py(lua.globals().requested).get(i) for i in (3000, 6000, 6001)}
+    assert asked() == {3000: 1, 6000: 1, 6001: 1}, asked()
+    # Unanswered requests are sent again; after three the item counts as without a name, found by its ID.
+    lua.execute("advance(9)")
+    assert asked() == {3000: 1, 6000: 1, 6001: 1}
+    lua.execute("advance(25)")
+    assert asked() == {3000: 3, 6000: 1, 6001: 3}, asked()
+    lua.execute("advance(10)")
+    type_in(lua, "robe")
+    assert h.status.text == "1 items · 2 items without a name: search by ID", h.status.text
+    type_in(lua, "6001")
+    assert len(results(lua)) == 1 and results(lua)[0].endswith("#6001|r") and h.title.text.endswith("#6001|r"), results(lua)
 
     # A name the client sends later is found once it arrives.
     type_in(lua, "leaf")
@@ -1119,7 +1147,7 @@ def test_price_history_without_auctionator_or_lists():
     load_addon(lua, data=app_data())
     slash(lua, "price Ärger")  # nothing, but the umlaut is lowered without an error
     h = history_panel(lua)
-    assert window(lua).historyTab.text == "Preisverlauf" and h.status.text == "0 Items"
+    assert window(lua).historyTab.text == "Preisverlauf" and h.status.text == "0 Items · lade 1 Namen vom Server", h.status.text
     type_in(lua, "peace")
     assert h.change.text.startswith("3 Scantage: niedrigster"), h.change.text
     assert h.summary.text == f"Zuletzt gesehen am {day_text(lua, 100, '%d.%m.')} für 0g 3s 60c", h.summary.text

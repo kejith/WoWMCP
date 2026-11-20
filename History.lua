@@ -10,6 +10,12 @@ local U = ns.util -- helpers of Lists.lua
 local ROW_HEIGHT = 20
 local MAX_RESULTS = 200
 local INDEX_BATCH = 500             -- item names read per frame while the index is built
+-- Names the client does not have are asked from the server a few at a time, as the item export does: a
+-- flood of requests is not answered in full. An item that stays without a name is asked again a few times.
+local NAME_BATCH = 40               -- name requests per tick
+local NAME_TICK = 0.25              -- seconds
+local NAME_RETRY = 10               -- seconds until an unanswered request is sent again
+local NAME_TRIES = 3
 local RECENT = 12                   -- items remembered as "recently viewed"
 local PLOT_TOP = -48                -- the plot inside the panel, below title and summary
 local AXIS = 76                     -- room for the price labels left of the plot
@@ -22,7 +28,8 @@ local DAY = 86400
 
 local panel
 local results, offset, selected = {}, 0, nil
-local index = { names = {}, lower = {}, ids = {}, lastDay = nil, built = false, building = false, stale = false }
+local index = { names = {}, lower = {}, ids = {}, lastDay = nil, built = false, building = false, stale = false,
+                waiting = {}, tries = {}, asked = {}, loading = false, unnamed = 0 }
 local refreshQueued = false
 local layout -- defined with the panel
 
@@ -74,8 +81,73 @@ local function setName(id, name)
     index.names[id], index.lower[id] = name, lower(name)
 end
 
--- Reads the names of all items in the database a few hundred per frame. Names the client does not know
--- yet arrive with GET_ITEM_INFO_RECEIVED.
+-- The item export of this addon (WoWMCP_Items) holds name and quality of the equipment seen in the auction
+-- house. Many of these items are not in the client's files, so the client knows their names only after
+-- asking the server; the export has them at once. Only an export in the client's language counts.
+local function exported(id)
+    local store = WoWMCP_Items
+    if type(store) ~= "table" or type(store.items) ~= "table" or (store.locale and store.locale ~= GetLocale()) then
+        return nil
+    end
+    local rec = store.items[id]
+    return type(rec) == "table" and rec or nil
+end
+
+local function knownName(id)
+    local rec = exported(id)
+    return U.str(U.try(C_Item and C_Item.GetItemNameByID, id)) or (rec and U.str(rec.name))
+end
+
+local refreshSoon -- defined below, with the events
+
+-- Asks the server for the names still missing, NAME_BATCH per tick, and looks for the answers itself
+-- (GET_ITEM_INFO_RECEIVED does not come for every request). Stops when every item has a name or was asked
+-- NAME_TRIES times; index.unnamed counts the items left without one, which a search by ID still finds.
+local function loadNames()
+    if index.loading then return end
+    index.loading = true
+    local request = C_Item and C_Item.RequestLoadItemDataByID
+    local function tick()
+        local now = U.num(U.try(GetTime)) or 0
+        local waiting, requested, found, gaveUp = {}, 0, false, 0
+        for _, id in ipairs(index.waiting) do
+            local name = not index.names[id] and knownName(id)
+            if name then
+                setName(id, name)
+                found = true
+            elseif not index.names[id] then
+                local tries, asked = index.tries[id] or 0, index.asked[id]
+                local due = not asked or now - asked >= NAME_RETRY
+                if due and tries >= NAME_TRIES then
+                    gaveUp = gaveUp + 1
+                else
+                    if due and requested < NAME_BATCH then
+                        requested = requested + 1
+                        index.tries[id], index.asked[id] = tries + 1, now
+                        U.try(request, id)
+                    end
+                    waiting[#waiting + 1] = id
+                end
+            end
+        end
+        index.waiting = waiting
+        if #waiting == 0 then
+            index.loading = false
+            index.unnamed = 0
+            for _, id in ipairs(index.ids) do
+                if not index.names[id] then index.unnamed = index.unnamed + 1 end
+            end
+            refreshSoon()
+            return
+        end
+        if found then refreshSoon() end
+        C_Timer.After(NAME_TICK, tick)
+    end
+    tick()
+end
+
+-- Reads the names of all items in the database a few hundred per frame, from the client or the item
+-- export. Names neither knows are asked from the server afterwards (loadNames).
 local function buildIndex()
     local db = database()
     if not db or index.building then return end
@@ -93,20 +165,22 @@ local function buildIndex()
     end
     table.sort(ids)
     index.ids, index.lastDay = ids, lastDay
-    local position = 0
-    local nameOf, request = C_Item and C_Item.GetItemNameByID, C_Item and C_Item.RequestLoadItemDataByID
+    local position, missing = 0, {}
     local function step()
         for _ = 1, INDEX_BATCH do
             position = position + 1
             local id = ids[position]
             if not id then
                 index.built, index.building = true, false
+                -- A load still running keeps its tries; it takes the new list on its next tick.
+                index.waiting = missing
+                if #missing > 0 then loadNames() else index.unnamed = 0 end
                 if panel and panel:IsShown() then ns.history.search() end
                 return
             end
             if not index.names[id] then
-                local name = U.str(U.try(nameOf, id))
-                if name then setName(id, name) else U.try(request, id) end
+                local name = knownName(id)
+                if name then setName(id, name) else missing[#missing + 1] = id end
             end
         end
         if panel and panel:IsShown() then panel.status:SetText(L.historyIndexing:format(position, #ids)) end
@@ -122,6 +196,10 @@ end
 local function itemQuality(id)
     local quality = U.num(U.try(C_Item and C_Item.GetItemQualityByID, id))
     if not quality then quality = U.num(select(3, U.try(C_Item and C_Item.GetItemInfo, id))) end
+    if not quality then
+        local rec = exported(id)
+        quality = rec and U.num(rec.quality)
+    end
     return quality
 end
 
@@ -132,7 +210,7 @@ local function find(text)
     if id then
         local db = database()
         local found = (db and db[tostring(id)]) and { id } or {}
-        return found, #found
+        return found, #found, true
     end
     local query = lower(text)
     if #query < 2 then return nil end
@@ -193,7 +271,7 @@ local function shortCoins(copper)
 end
 
 local function nameOf(id)
-    return U.str(U.try(C_Item and C_Item.GetItemNameByID, id)) or index.names[id] or ("#" .. id)
+    return knownName(id) or index.names[id] or ("#" .. id)
 end
 
 local function colored(id)
@@ -441,12 +519,20 @@ local function refreshResults()
     end
 end
 
+-- Items a search by name cannot find yet: names still on their way, or never sent by the server.
+local function nameNote()
+    if #index.waiting > 0 then return " \194\183 " .. L.historyLoading:format(#index.waiting) end
+    if index.unnamed > 0 then return " \194\183 " .. L.historyUnnamed:format(index.unnamed) end
+    return ""
+end
+
 -- Fills the result list from the search box; an empty box lists the recently viewed items.
 local function search()
     if not panel then return end
     ensureIndex()
     local text = panel.box:GetText() or ""
-    local found, total = find(text)
+    local found, total, byId = find(text)
+    local note = byId and "" or nameNote()
     offset = 0
     if not database() then
         results = {}
@@ -456,9 +542,9 @@ local function search()
         if index.building then
             panel.status:SetText(L.historyIndexing:format(0, #index.ids))
         elseif total > #found then
-            panel.status:SetText(L.historyMore:format(total, #found))
+            panel.status:SetText(L.historyMore:format(total, #found) .. note)
         else
-            panel.status:SetText(L.historyHits:format(total))
+            panel.status:SetText(L.historyHits:format(total) .. note)
         end
         if #found == 1 and found[1] ~= selected then showItem(found[1]) end
     else
@@ -676,6 +762,16 @@ local function linkInserted(text)
     search()
 end
 
+-- Names arrive in bursts; search again once for a burst.
+refreshSoon = function()
+    if not (panel and panel:IsShown()) or refreshQueued then return end
+    refreshQueued = true
+    C_Timer.After(0.5, function()
+        refreshQueued = false
+        if panel:IsShown() then search() end
+    end)
+end
+
 local events = CreateFrame("Frame")
 for _, event in ipairs({ "PLAYER_LOGIN", "GET_ITEM_INFO_RECEIVED", "AUCTION_HOUSE_CLOSED" }) do
     if not (C_EventUtils and C_EventUtils.IsEventValid) or C_EventUtils.IsEventValid(event) then
@@ -698,14 +794,7 @@ events:SetScript("OnEvent", function(_, event, id)
         local name = U.str(U.try(C_Item and C_Item.GetItemNameByID, id))
         if not name then return end
         setName(id, name)
-        -- Names arrive in bursts; search again once for a burst.
-        if panel and panel:IsShown() and not refreshQueued then
-            refreshQueued = true
-            C_Timer.After(0.5, function()
-                refreshQueued = false
-                if panel:IsShown() then search() end
-            end)
-        end
+        refreshSoon()
     elseif event == "AUCTION_HOUSE_CLOSED" then
         -- Auctionator has stored a scan: new items for the index, new days for the plot.
         index.stale = true

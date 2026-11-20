@@ -68,7 +68,7 @@ The last tab of the window, "Price history", works without the app and without a
 - Below the graph: the last price seen, and over the scan days the lowest, highest and average lowest price and the change from the first to the last day.
 - Click the icon to search the item in the auction house, shift-click it to link it.
 
-Auctionator keeps 21 days by default (its option "price history days"). The names are read from the client a few hundred per frame the first time the tab opens; names the client has not loaded yet arrive a moment later.
+Auctionator keeps 21 days by default (its option "price history days"). The names are read the first time the tab opens, a few hundred per frame: from the client, else from the item export (`WoWMCP_Items`). Many Forever items, most of them equipment, are not in the client's files, so the client knows their names only after asking the server; the export has them at once. Names neither knows are asked from the server 40 at a time, every unanswered item up to three times, 10 seconds apart; the status line below the results says how many are still loading and how many stayed without a name. Those are still found by their item ID.
 
 ## What is exported
 
