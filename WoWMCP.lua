@@ -69,10 +69,11 @@ end
 
 -- Tooltip text below the item name, as shown in game: one string per line ("left | right" when the line has
 -- a right column, e.g. "Head | Cloth") plus each line's left text colour (red = requirement not met).
-local function tooltipLines(data)
+-- `first` is the first line to keep (default 2: line 1 is the item name).
+local function tooltipLines(data, first)
     if type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
     local lines, colors = {}, {}
-    for i = 2, #data.lines do -- line 1 is the item name
+    for i = first or 2, #data.lines do
         local line = data.lines[i]
         local text, right = str(line.leftText), str(line.rightText)
         if right then text = (text or "") .. " | " .. right end
@@ -85,8 +86,8 @@ local function tooltipLines(data)
 end
 
 local function itemRecord(link, itemID, count)
-    local name, _, quality, itemLevel, reqLevel, itemType, itemSubType, _, equipLoc =
-        try(C_Item.GetItemInfo, link or itemID)
+    local name, _, quality, itemLevel, reqLevel, itemType, itemSubType, _, equipLoc, _, _, classID, subclassID,
+        bindType = try(C_Item.GetItemInfo, link or itemID)
     return {
         id = itemID,
         link = link,
@@ -99,7 +100,18 @@ local function itemRecord(link, itemID, count)
         type = str(itemType),
         subType = str(itemSubType),
         equipLoc = str(equipLoc),
+        -- Since 1.12: item class and subclass as numbers (the names above are in the client's language)
+        -- and how the item binds (0 never, 1 on pickup, 2 on equip, 3 on use).
+        classID = num(classID),
+        subclassID = num(subclassID),
+        bind = num(bindType),
     }
+end
+
+-- Armor and weapons that can be equipped; class and slot come from the client files, no server request.
+local function isEquippable(itemID)
+    local id, _, _, equipLoc, _, classID = try(C_Item.GetItemInfoInstant, itemID)
+    return id ~= nil and (classID == 2 or classID == 4) and str(equipLoc) ~= nil
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -159,9 +171,34 @@ local function collectStats()
         s.critFromIntellect = fromInt and fromInt * 100 -- percent from all intellect
     end
     s.hpPerStamina = num(try(UnitHPPerStamina, "player"))
+    -- Since 1.12: mana per second as the character sheet computes it (it shows these times 5):
+    -- `base` outside the five-second rule, `casting` while casting; the two `spirit` values are the
+    -- part that comes from spirit alone.
+    local base, casting = try(GetManaRegen)
+    local spirit, spiritCasting = try(GetManaRegenFromSpirit)
+    if num(base) or num(spirit) then
+        s.manaRegen = { base = num(base), casting = num(casting), spirit = num(spirit), spiritCasting = num(spiritCasting) }
+    end
     s.manaPerIntellect = num(MANA_PER_INTELLECT)
+    s.spellHaste = num(try(UnitSpellHaste, "player")) -- percent, since 1.12
     s.lifeTap = collectLifeTap()
     return s
+end
+
+-- The buffs on the character (since 1.12): the stats above include them, so a reader can tell a
+-- snapshot taken with raid buffs from one without.
+local function collectBuffs()
+    local get = C_UnitAuras and C_UnitAuras.GetAuraDataByIndex
+    if not get then return nil end
+    local buffs = {}
+    for i = 1, 40 do
+        local aura = try(get, "player", i, "HELPFUL")
+        if type(aura) ~= "table" then break end
+        if num(aura.spellId) then
+            buffs[#buffs + 1] = { id = aura.spellId, name = str(aura.name) }
+        end
+    end
+    return buffs
 end
 
 local function collectPvpRank()
@@ -201,6 +238,7 @@ local function collectCharacter()
         dead = UnitIsDeadOrGhost("player") or nil,
         pvpRank = collectPvpRank(),
         stats = collectStats(),
+        buffs = collectBuffs(),
     }
     local mapID = try(C_Map.GetBestMapForUnit, "player")
     if mapID then
@@ -269,6 +307,16 @@ local function scanContainer(bag)
             local rec = itemRecord(info.hyperlink, info.itemID, info.stackCount)
             rec.slot = slot
             rec.bound = info.isBound or nil
+            -- Since 1.12: gear in bags and bank carries its stats and tooltip like equipped gear, so
+            -- the app can rate what the character already owns (the link has the random suffix; the
+            -- item export only knows auction house items by their ID).
+            if isEquippable(info.itemID) then
+                rec.stats = str(info.hyperlink) and copyPlain(try(C_Item.GetItemStats, info.hyperlink)) or nil
+                rec.tooltip, rec.tipColors = tooltipLines(try(C_TooltipInfo.GetBagItem, bag, slot))
+                if (not rec.tooltip or #rec.tooltip == 0) and str(info.hyperlink) then
+                    rec.tooltip, rec.tipColors = tooltipLines(try(C_TooltipInfo.GetHyperlink, info.hyperlink))
+                end
+            end
             items[#items + 1] = rec
         end
     end
@@ -484,12 +532,18 @@ local function exportTree(configID, treeID)
             for _, gid in ipairs(node.groupIDs or {}) do
                 if groupName[gid] then group = groupName[gid] break end
             end
+            -- Since 1.12: what the talent does at the learned rank. `tip` is the talent tooltip for
+            -- that rank, `text` the description of the talent's spell (one spell serves every rank,
+            -- so its numbers are not always the learned rank's).
+            local tip = entryID and tooltipLines(try(C_TooltipInfo.GetTraitEntry, entryID, rank), 1)
             tree.talents[#tree.talents + 1] = {
                 name = name,
                 spellID = spellID,
                 rank = rank,
                 maxRank = num(node.maxRanks),
                 group = group,
+                text = spellID and str(try(C_Spell.GetSpellDescription, spellID)) or nil,
+                tip = (tip and #tip > 0) and tip or nil,
             }
         end
     end
@@ -745,6 +799,20 @@ end
 -- description's resolved numbers also serve as ground truth for the engine's spell data.
 ---------------------------------------------------------------------------------------------------
 
+-- What a cast costs: the mana cost if the spell has one, else its first cost with the power type.
+local function spellCost(spellID)
+    local costs = try(C_Spell.GetSpellPowerCost, spellID)
+    if type(costs) ~= "table" then return nil end
+    local other
+    for _, c in ipairs(costs) do
+        if type(c) == "table" and num(c.cost) and c.cost > 0 then
+            if num(c.type) == 0 then return c.cost end
+            other = other or c
+        end
+    end
+    if other then return other.cost, num(other.type) end
+end
+
 local function collectSpellbook()
     local book = C_SpellBook
     if not (book and book.GetNumSpellBookSkillLines and book.GetSpellBookSkillLineInfo
@@ -763,6 +831,9 @@ local function collectSpellbook()
                 local item = try(book.GetSpellBookItemInfo, slot, bank)
                 -- Only learned spells: future (level-gated) spells, flyouts and pet actions are skipped.
                 if item and item.spellID and item.itemType == spellType then
+                    local cost, costType = spellCost(item.spellID)
+                    local info = try(C_Spell.GetSpellInfo, item.spellID)
+                    local cooldown = num(try(GetSpellBaseCooldown, item.spellID))
                     spells[item.spellID] = {
                         name = str(item.name),
                         -- "Rank 4" in the client's language; may still be empty right after
@@ -770,6 +841,13 @@ local function collectSpellbook()
                         rank = str(item.subName),
                         text = str(try(C_Spell.GetSpellDescription, item.spellID)),
                         passive = item.isPassive and true or nil,
+                        -- Since 1.12, as the game computes them (talents included): what a cast
+                        -- costs (mana unless costType names another power), cast time and cooldown
+                        -- in milliseconds.
+                        cost = cost,
+                        costType = costType,
+                        castTime = type(info) == "table" and num(info.castTime) or nil,
+                        cooldown = (cooldown and cooldown > 0) and cooldown or nil,
                     }
                     count = count + 1
                 end
@@ -877,12 +955,6 @@ local function itemInfoRecord(itemID)
     }
     rec.tooltip, rec.tipColors = tooltipLines(try(C_TooltipInfo.GetItemByID, itemID))
     return rec
-end
-
--- Armor and weapons that can be equipped; class and slot come from the client files, no server request.
-local function isEquippable(itemID)
-    local id, _, _, equipLoc, _, classID = try(C_Item.GetItemInfoInstant, itemID)
-    return id ~= nil and (classID == 2 or classID == 4) and str(equipLoc) ~= nil
 end
 
 -- Item IDs Auctionator saw in its scans of the last AH_RECENT_DAYS days. Auctionator decodes its price

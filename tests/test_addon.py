@@ -237,6 +237,13 @@ function UnitPowerMax() return 3000 end
 function UnitPowerType() return 0, "MANA" end
 function GetSpellHitModifier() return 5 end
 function GetSpellCritChanceFromStat() return 0.02 end
+function GetManaRegen() return 3.5, 1.25 end
+function GetManaRegenFromSpirit() return 2.5, 0.75 end
+function UnitSpellHaste() return 2 end
+C_UnitAuras = { GetAuraDataByIndex = function(unit, i, filter)
+  assert(unit == "player" and filter == "HELPFUL")
+  return ({ { spellId = 1243, name = "Power Word: Fortitude" }, { spellId = 588, name = "Inner Fire" } })[i]
+end }
 MANA_PER_INTELLECT = 15
 C_Map = {
   GetBestMapForUnit = function() return 1454 end,
@@ -265,10 +272,18 @@ C_SpellBook = {
     return book[slot]
   end,
 }
+-- Shadow Bolt costs mana, Life Tap health (power type -2), the passive spell nothing.
 C_Spell = {
   GetSpellDescription = function() return "Converts 310 health into 310 mana." end,
   GetSpellName = function(id) return "Spell " .. id end,
+  GetSpellPowerCost = function(id)
+    if id == 686 then return { { type = 3, cost = 0 }, { type = 0, cost = 148 } } end
+    if id == 1454 then return { { type = -2, cost = 310 } } end
+    return {}
+  end,
+  GetSpellInfo = function(id) return { spellID = id, castTime = id == 686 and 2500 or 0 } end,
 }
+function GetSpellBaseCooldown(id) return id == 1454 and 1500 or 0, 1500 end
 
 -- Items: loaded = false means the client has not received the item from the server yet.
 items = {
@@ -308,9 +323,22 @@ local function tooltip(id)
     { leftText = "Equip: Improves your chance to hit by 1%.", leftColor = { r = 0, g = 1, b = 0 } },
   } }
 end
+-- A bag slot's tooltip also says how the item is bound; the bank's own container (-1) has no bag
+-- tooltip, there the link's tooltip serves.
 C_TooltipInfo = {
   GetInventoryItem = function(_, slot) return tooltip(1001) end,
   GetItemByID = function(id) return tooltip(id) end,
+  GetBagItem = function(bag, slot)
+    local s = containers[bag] and containers[bag].slots[slot]
+    if not s or bag < 0 then return nil end
+    local tip = tooltip(s[1])
+    table.insert(tip.lines, 2, { leftText = "Binds when equipped", leftColor = { r = 1, g = 1, b = 1 } })
+    return tip
+  end,
+  GetHyperlink = function(itemLink) return tooltip(tonumber(itemLink:match("item:(%d+)"))) end,
+  GetTraitEntry = function(entryID, rank)
+    return { lines = { { leftText = ("Increases healing by %d%%."):format(rank * 2), leftColor = { r = 1, g = 0.82, b = 0 } } } }
+  end,
 }
 function GetInventoryItemLink(_, slot) if slot == 1 then return link(1001) end end
 function GetInventoryItemID(_, slot) if slot == 1 then return 1001 end end
@@ -319,7 +347,8 @@ function GetInventoryItemDurability(slot) return 30, 40 end
 Enum = { BagIndex = { Backpack = 0, Bag_1 = 1, Bank = -1, BankBag_1 = 5, AccountBankTab_1 = 13 },
          TooltipDataType = { Item = 0 } }
 containers = {
-  [0] = { name = "Backpack", size = 16, slots = { [1] = { 2447, 20 }, [2] = { 284583, 1 } } },
+  [0] = { name = "Backpack", size = 16, slots = { [1] = { 2447, 20 }, [2] = { 284583, 1 }, [4] = { 1003, 1 } } },
+  [-1] = { name = "Bank", size = 24, slots = { [2] = { 1001, 1 } } },
   [5] = { name = "Bank Bag", size = 8, slots = { [3] = { 118, 5 } } },
   [13] = { name = "Account Bank", size = 8, slots = { [1] = { 118, 99 } } },
 }
@@ -359,8 +388,21 @@ C_Reputation = {
 FACTION_STANDING_LABEL5 = "Friendly"
 function GetProfessions() return 1 end
 function GetProfessionInfo() return "Alchemy", 0, 150, 225, 0, 0, 171, 0 end
-C_ClassTalents = { GetActiveConfigID = function() return nil end }
-C_Traits = { GetConfigIDByTreeID = function() return nil end }
+-- One class tree with two nodes: a talent with 3 of 5 points and one without points.
+C_ClassTalents = { GetActiveConfigID = function() return 7 end }
+C_Traits = {
+  GetConfigIDByTreeID = function() return nil end,
+  GetConfigInfo = function() return { treeIDs = { 900 } } end,
+  GetTreeCurrencyInfo = function() return { { spent = 3, quantity = 1 } } end,
+  GetGroupDisplayInfoByTreeID = function() return { { groupID = 31, displayName = "Holy" } } end,
+  GetGroupCurrencyInfo = function() return { { traitNodeGroupID = 31, currencyInfos = { { spent = 3 } } } } end,
+  GetTreeNodes = function() return { 501, 502 } end,
+  GetNodeInfo = function(_, nodeID)
+    return { activeRank = nodeID == 501 and 3 or 0, maxRanks = 5, entryIDs = { nodeID + 100 }, groupIDs = { 31 } }
+  end,
+  GetEntryInfo = function(_, entryID) return { definitionID = entryID + 100 } end,
+  GetDefinitionInfo = function(definitionID) return { spellID = 14898 } end,
+}
 C_CurrencyInfo = { GetCurrencyInfo = function() return { name = "Merchant's Favor", quantity = favor } end }
 
 -- Profession window and merchant
@@ -488,6 +530,9 @@ def test_snapshot():
     stats = who["stats"]
     assert stats["intellect"] == 41 and stats["spellHit"] == 5 and stats["critFromIntellect"] == 2
     assert stats["lifeTap"] == {"id": 1456, "text": "Converts 310 health into 310 mana."}
+    assert stats["manaRegen"] == {"base": 3.5, "casting": 1.25, "spirit": 2.5, "spiritCasting": 0.75}
+    assert stats["spellHaste"] == 2
+    assert who["buffs"] == [{"id": 1243, "name": "Power Word: Fortitude"}, {"id": 588, "name": "Inner Fire"}]
     assert "meleeCrit" not in stats  # GetCritChance does not exist here; a missing function is not an error
 
     hat = c["equipment"][0]
@@ -498,7 +543,14 @@ def test_snapshot():
     assert hat["tipColors"] == ["ffffff", "ffffff", "00ff00"]
 
     bag = c["bags"][0]
-    assert bag["id"] == 0 and bag["size"] == 16 and [(i["id"], i["count"]) for i in bag["items"]] == [(2447, 20), (284583, 1)]
+    assert bag["id"] == 0 and bag["size"] == 16
+    assert [(i["id"], i["count"]) for i in bag["items"]] == [(2447, 20), (284583, 1), (1003, 1)]
+    # Gear in a bag carries what the app needs to rate it; anything else stays a plain record.
+    herb, boots = bag["items"][0], bag["items"][2]
+    assert (herb["classID"], herb["bind"]) == (7, 2) and "stats" not in herb and "tooltip" not in herb
+    assert (boots["equipLoc"], boots["classID"], boots["subclassID"], boots["bind"]) == ("INVTYPE_FEET", 4, 1, 2)
+    assert boots["stats"] == {"ITEM_MOD_INTELLECT_SHORT": 10} and "bound" not in boots
+    assert boots["tooltip"][:2] == ["Binds when equipped", "Head | Cloth"] and len(boots["tipColors"]) == len(boots["tooltip"])
     assert "bank" not in c  # only readable while the bank is open
     assert [q["id"] for q in c["quests"]] == [11, 12] and c["quests"][0]["category"] == "Durotar"
     assert c["quests"][1]["complete"] is True and c["quests"][1]["suggestedGroup"] == 2
@@ -511,9 +563,18 @@ def test_snapshot():
 
     book = c["spellbook"]
     assert book["count"] == 4 and set(book["spells"]) == {6603, 1454, 686, 132}
-    assert book["spells"][686] == {"name": "Shadow Bolt", "rank": "Rank 3",
+    assert book["spells"][686] == {"name": "Shadow Bolt", "rank": "Rank 3", "cost": 148, "castTime": 2500,
                                    "text": "Converts 310 health into 310 mana."}
-    assert book["spells"][132]["passive"] is True
+    # A cost that is not mana names its power type; an instant spell has cast time 0.
+    tap = book["spells"][1454]
+    assert (tap["cost"], tap["costType"], tap["castTime"], tap["cooldown"]) == (310, -2, 0, 1500)
+    assert book["spells"][132]["passive"] is True and "cost" not in book["spells"][132]
+
+    # Talents: only nodes with points, with the tooltip of the learned rank.
+    tree = c["talents"]["class"][0]
+    assert (tree["spent"], tree["unspent"]) == (3, 1) and tree["groups"] == [{"id": 31, "name": "Holy", "spent": 3}]
+    assert tree["talents"] == [{"name": "Spell 14898", "spellID": 14898, "rank": 3, "maxRank": 5, "group": "Holy",
+                                "text": "Converts 310 health into 310 mana.", "tip": ["Increases healing by 6%."]}]
     assert 695 not in book["spells"], "a future (level-gated) spell is not learned"
     assert 99999 not in book["spells"], "the guild page is not the character's book"
     print("ok test_snapshot")
@@ -532,7 +593,11 @@ def test_combat_and_bank():
     # The bank: every character bank container, never the account bank.
     lua.execute('fire("BANKFRAME_OPENED"); advance(3)')
     bank = char(lua)["bank"]
-    assert [b["id"] for b in bank["containers"]] == [5] and bank["containers"][0]["items"][0]["id"] == 118
+    assert [b["id"] for b in bank["containers"]] == [-1, 5] and bank["containers"][1]["items"][0]["id"] == 118
+    # Gear in the bank's own container has no bag tooltip: the link's tooltip serves.
+    hat = bank["containers"][0]["items"][0]
+    assert hat["id"] == 1001 and hat["stats"] == {"ITEM_MOD_INTELLECT_SHORT": 10}
+    assert hat["tooltip"] == ["Head | Cloth", "+10 Intellect", "Equip: Improves your chance to hit by 1%."]
     # A failing section keeps its old data and reports the error.
     lua.execute('C_QuestLog.GetNumQuestLogEntries = function() error("boom") end; fire("QUEST_LOG_UPDATE"); advance(3)')
     c = char(lua)
