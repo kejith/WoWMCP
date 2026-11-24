@@ -34,12 +34,12 @@ Auctionator is optional. The item export needs it, because it reads the items fr
 
 The desktop app computes AH upgrades, writs, trade crates, profession recipes and consumables from the exported data. It writes the result into `AppData.lua` in the addon folder, and the game reads that file on the next `/reload`. So new data needs two reloads: one that saves the scan for the app, and one that loads what the app made of it.
 
-- **Window** (`/wowmcp show`, or together with the auction house): one tab per list, sections with their items, price and a note per item. Items marked `*` are what the list says to buy.
-  - Drag the grip in the bottom right corner to resize the window: more rows, a wider price history graph. Right-click the grip for the default size. Position and size are kept.
+- **Window** (`/wowmcp show`, or together with the auction house): a dark stone panel matching the desktop app, with a slim title bar (coin icon, title, scan timestamp, close button), flat underline tabs along the top edge (with the price history separated on the right), a context strip for the open tab's note, and a dark inset body with a thin scrollbar. Section headers sit on elevated cards with a gold accent bar and a compact "Search" button; item rows show a crisp 1px quality border around cropped icons, a left gold accent bar and `*` on shopping-list items, tree connectors for indented sub-rows, alternating stripes, amount, note and price in coins. Along the footer: "Open with the auction house" and the primary "Search the shopping list" button.
+  - Drag the corner grip in the bottom right to resize the window: more rows, a wider info column, a wider price history graph. Right-click the grip for the default size. Position, size and the open tab are kept. Escape closes it.
   - Click an item to search it in the auction house.
   - Shift-click an item to link it, into the chat or into the search box of the auction house.
   - Right-click an item to see its price history.
-  - "Search" next to a section searches all of its items at once, "Search the shopping list" every marked item of the tab. Both need Auctionator.
+  - "Search" on a section header searches all of its items at once, "Search the shopping list" every marked item of the tab. Both need Auctionator.
 - **Auctionator shopping lists** `WoWMCP: <list>` hold the marked items of each list, with the amount to buy. They are written once per data file and character, a few seconds after login, and removed when a list has nothing to buy any more. What you change in them stays until the app sends new data.
 - **Tooltips**: items the lists know get light blue lines, for example "Upgrade for Chest: +12.5 points, no. 1 in the AH scan", "Reagent for Mana Potion: profit 12s per craft" or "For a writ (Journeyman): hand in 4x".
 - **Merchants**: when a merchant sells a recipe the app found worth learning, the addon says so in the chat.
@@ -63,8 +63,9 @@ A row is `{id, name, q (quality), n (amount), info, price (copper), shop (to buy
 
 The last tab of the window, "Price history", works without the app and without a `/reload`: it reads Auctionator's price database, which Auctionator loads on login and updates with every scan.
 
+- **Layout**: the search box and the results on the left, on the right the item (icon, name, last price), the graph in an inset of its own and the statistics below it.
 - **Search** by name (every word must be in the name, any case), item ID (`2447` or `#2447`) or item link. Shift-click an item into the search box, as in the profession window. An empty box lists the items you looked at last.
-- **Graph** per scan day: a line through the lowest price, a band from the lowest to the highest minimum price of the day (Auctionator notes both when it scans more than once a day) and bars for the number of offers. The time axis runs to the newest scan day of the whole database, so an item that vanished from the auction house ends early. Hover a day for its numbers.
+- **Graph** per scan day, on a faint grid with the prices on the left and three dates below: a line through the lowest price, a band from the lowest to the highest minimum price of the day (Auctionator notes both when it scans more than once a day) and bars for the number of offers. The time axis runs to the newest scan day of the whole database, so an item that vanished from the auction house ends early. Hover a day for its numbers.
 - Below the graph: the last price seen, and over the scan days the lowest, highest and average lowest price and the change from the first to the last day.
 - Click the icon to search the item in the auction house, shift-click it to link it.
 
@@ -83,6 +84,7 @@ Limits:
 - The bank can only be read while it is open and keeps that state until the next visit.
 - Recipes are read while your own profession window is open, vendor prices when you talk to a merchant.
 - No snapshot is taken in combat; it follows when the fight ends.
+- In a dungeon or a raid the client keeps the character's stats secret (attributes, spell power, crit, the buffs). A snapshot taken there keeps the stats and buffs of the last snapshot taken outside: `character.statsKept` is `true` then, and `character.statsUpdated` says when the stats were read. A character that was never saved outside has no stats until it is.
 - A snapshot expands all reputation categories, because collapsed factions cannot be read.
 - The item export starts over when the client build or the client language changes.
 
@@ -105,6 +107,8 @@ uv run tests/test_addon.py
 ```
 
 The game itself runs Lua 5.1 with its own API, so a change still needs a look in the game. The widget stubs answer every method they do not know with nothing, so they cannot tell whether a frame looks right.
+
+The window uses a custom dark stone theme (1px pixel-aligned borders, flat underline tabs, flat buttons, thin scrollbars, cropped icons with 1px quality frames) without relying on Blizzard panel templates. The magnifier atlas (`common-search-magnifyingglass`) is looked up via `C_Texture.GetAtlasInfo` first and falls back to an icon texture.
 
 `WoWMCP.lua` is the export, `Lists.lua` the window, tooltips and shopping lists. `Lists.lua` loads last and only reads `WoWMCP_AppData`, so a problem there cannot stop the export.
 

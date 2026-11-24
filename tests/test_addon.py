@@ -152,7 +152,27 @@ function widget(kind, name, parent, template)
     if self.scripts.OnClick and self:IsEnabled() then self.scripts.OnClick(self, button or "LeftButton") end
   end
   if template == "UICheckButtonTemplate" then w.Text = widget("FontString", nil, w) end
+  -- What the Blizzard templates bring along, as far as the addon looks at it.
+  if template == "ButtonFrameTemplate" then
+    function w:SetTitle(title) self.titleText = title end
+    function w:SetPortraitToAsset(texture) self.portrait = texture end
+    w.Inset, w.CloseButton = widget("Frame", nil, w, "InsetFrameTemplate"), widget("Button", nil, w)
+  elseif template == "PanelTabButtonTemplate" then
+    for _, key in ipairs({ "Text", "Left", "Middle", "Right", "LeftActive", "MiddleActive", "RightActive" }) do
+      w[key] = widget("Texture", nil, w)
+    end
+  elseif template == "UIPanelScrollBarTemplate" then
+    w.ScrollUpButton, w.ScrollDownButton = widget("Button", nil, w), widget("Button", nil, w)
+  end
   return setmetatable(w, widgetMeta)
+end
+-- Blizzard's tab functions: they paint a tab as selected or not, and size it to its text.
+function PanelTemplates_SelectTab(tab) tab.painted = "selected" end
+function PanelTemplates_DeselectTab(tab) tab.painted = "deselected" end
+function PanelTemplates_TabResize(tab, padding, absoluteSize, minWidth, maxWidth)
+  local width = #(tab.text or "") * 7 + 20 + (padding or 0)
+  if maxWidth and width > maxWidth then width = maxWidth elseif minWidth and width < minWidth then width = minWidth end
+  tab:SetWidth(width)
 end
 function CreateFrame(kind, name, parent, template)
   local f = widget(kind, name, parent, template)
@@ -580,6 +600,55 @@ def test_snapshot():
     print("ok test_snapshot")
 
 
+def test_stats_in_an_instance():
+    lua = new_runtime()
+    load_addon(lua)
+    before = char(lua)
+    outside = before["character"]
+    assert outside["statsUpdated"] == before["updated"] and "statsKept" not in outside
+    # In a dungeon the client answers with secret values for the stats and the auras; the snapshot keeps
+    # the stats and buffs of the last one taken outside and everything else is new.
+    lua.execute('''
+        local secret = {}
+        function issecretvalue(v) return v == secret end
+        local function hidden() return secret, secret end
+        saved = { UnitStat, UnitArmor, GetSpellBonusDamage, GetSpellCritChance, GetSpellBonusHealing, GetManaRegen,
+                  C_UnitAuras.GetAuraDataByIndex }
+        UnitStat, UnitArmor, GetSpellBonusDamage, GetSpellCritChance, GetSpellBonusHealing, GetManaRegen =
+            hidden, hidden, hidden, hidden, hidden, hidden
+        C_UnitAuras.GetAuraDataByIndex = function() return { spellId = secret, name = secret } end
+        money = 70000; fire("PLAYER_MONEY"); advance(3)''')
+    c = char(lua)
+    inside = c["character"]
+    assert c["updated"] > before["updated"] and inside["money"] == 70000 and c["errors"] == {}
+    assert inside["stats"] == outside["stats"] and inside["stats"]["intellect"] == 41
+    assert inside["buffs"] == outside["buffs"]
+    assert inside["statsKept"] is True and inside["statsUpdated"] == before["updated"]
+    # A second snapshot in there keeps them as well, with the time they were read.
+    lua.execute('money = 80000; fire("PLAYER_MONEY"); advance(3)')
+    again = char(lua)["character"]
+    assert again["money"] == 80000 and again["stats"] == outside["stats"] and again["statsUpdated"] == before["updated"]
+    # Outside again the stats are read anew.
+    lua.execute('''UnitStat, UnitArmor, GetSpellBonusDamage, GetSpellCritChance, GetSpellBonusHealing, GetManaRegen,
+            C_UnitAuras.GetAuraDataByIndex = table.unpack(saved)
+        function UnitStat(_, i) return i * 20, i * 20 + 1 end
+        fire("PLAYER_MONEY"); advance(3)''')
+    c = char(lua)
+    assert c["character"]["stats"]["intellect"] == 81 and "statsKept" not in c["character"]
+    assert c["character"]["statsUpdated"] == c["updated"] > before["updated"]
+
+    # A character that was never seen outside has nothing to keep: the stats stay as they come.
+    lua = new_runtime()
+    lua.execute('''
+        local secret = {}
+        function issecretvalue(v) return v == secret end
+        function UnitStat() return secret, secret end''')
+    load_addon(lua)
+    fresh = char(lua)["character"]
+    assert "intellect" not in fresh["stats"] and "statsKept" not in fresh and "statsUpdated" not in fresh
+    print("ok test_stats_in_an_instance")
+
+
 def test_combat_and_bank():
     lua = new_runtime()
     load_addon(lua)
@@ -761,8 +830,19 @@ def lua_to_py_list(table):
     return [table[i] for i in range(1, len(table) + 1)]
 
 
+def last_point(w):
+    """The last SetPoint of a widget, as a 1-based Lua table (point, relative frame, relative point, x, y)."""
+    return w.points[len(w.points)]
+
+
 def tabs(lua):
-    return [(t.text, bool(t.locked)) for t in lua_to_py_list(window(lua).tabs) if t.shown]
+    """The list tabs on screen: (title, selected). The selected one shows the gold underline bar."""
+    out = []
+    for t in lua_to_py_list(window(lua).tabs):
+        if t.shown:
+            assert bool(t.bar.shown) == bool(t.selected), (t.text, t.selected, t.bar.shown)
+            out.append((t.text, bool(t.selected)))
+    return out
 
 
 def slash(lua, text):
@@ -781,8 +861,11 @@ def test_lists_window():
     slash(lua, "show")
     w = window(lua)
     assert w.shown and "WoWMCPListFrame" in lua_to_py(lua.globals().UISpecialFrames)
+    # Modern dark stone panel: title bar with coin logo, close button, top underline tabs and note strip.
+    assert w.title.text == "WoW Forever Tools" and "Icons" in w.logo.texture and w.close.shown
     assert tabs(lua) == [("AH upgrades", True), ("Writs", False), ("Nothing to buy", False)], "broken lists are skipped"
-    assert w.note.text == "Budget 15g 0s 0c" and "2026-11-18" in w.sub.text and w.empty.text == ""
+    assert w.note.text == "Budget 15g 0s 0c" and w.hint.text == ""
+    assert "2026-11-18" in w.sub.text and w.empty.text == ""
     assert visible(lua) == [
         ("head", "Best package", "+12.5 points for 9g 0s 0c"),
         # The game's name wins over the one the app sent; * marks the shopping list.
@@ -793,15 +876,26 @@ def test_lists_window():
         ("item", "Old Boots", "+1.0", "0g 1s 0c"),
     ], visible(lua)
     assert w.rows[2].icon.texture == 131001 and not w.slider.shown and w.buy.enabled
+    # Icons get a crisp 1px quality border from uncommon on; shopping rows get a left gold accent bar;
+    # every other row of a section a stripe; headers get a card background and search button, no highlight.
+    hat, staff, boots = w.rows[2], w.rows[3], w.rows[6]
+    assert hat.icon.border.shown and staff.icon.border.shown and not boots.icon.border.shown
+    assert hat.shopBar.shown and staff.shopBar.shown and not boots.shopBar.shown
+    assert not hat.stripe.shown and staff.stripe.shown and not w.rows[5].stripe.shown and boots.stripe.shown
+    assert w.rows[1].search.shown and w.rows[1].headBg.shown and not w.rows[1].hl.shown and not w.rows[1].icon.shown and hat.hl.shown
 
-    # The second tab has more rows than fit: scrolling by wheel and by slider.
+    # The second tab has more rows than fit: scrolling by wheel and by the slim slider.
     click(w.tabs[2])
-    assert tabs(lua)[1] == ("Writs", True) and account(lua)["ui"]["tab"] == "writs"
+    assert tabs(lua)[:2] == [("AH upgrades", False), ("Writs", True)] and account(lua)["ui"]["tab"] == "writs"
+    assert w.note.text == "" and w.hint.text.startswith("Click: search")
     rows = visible(lua)
     assert len(rows) == 16 and rows[0] == ("head", "Journeyman", "") and w.slider.shown and w.slider.high == 34 - 16
     # An item the client does not know keeps the name the app sent, with its escaped "|".
     assert rows[1] == ("item", "|cffffd100*|r Writ: Elixir || Wisdom", "net -0g 5s 0c", "0g 50s 0c")
-    assert rows[2][1] == "|cffffd100*|r Peacebloom |cffffffffx20|r"
+    assert rows[2][1] == "|cffffd100*|r Peacebloom" and w.rows[3].count.text == "x20" and w.rows[2].count.text == ""
+    indent = lambda line: last_point(line.icon)[4]
+    assert (indent(w.rows[2]), indent(w.rows[3])) == (8, 26), "sub rows are indented"
+    assert not w.rows[2].branchV.shown and w.rows[3].branchV.shown and w.rows[3].branchH.shown
     w.scripts.OnMouseWheel(w, -1)
     assert visible(lua)[1] == ("item", "Filler 0", "", "") and w.slider.value == 3
     w.slider.SetValue(w.slider, 18)
@@ -816,13 +910,23 @@ def test_lists_window():
     assert not w.shown
     load_addon(lua, data=app_data())
     slash(lua, "show")
-    assert tabs(lua)[1] == ("Writs", True)
+    assert tabs(lua)[1] == ("Writs", True) and not window(lua).historyTab.bar.shown
     click(window(lua).tabs[3])
     assert visible(lua) == [("head", "Potions", ""), ("item", "Minor Healing Potion", "", "")]
     assert window(lua).buy.enabled is False
 
-    # Dragging saves the position; the next opening uses it.
+    # The tabs sit in a horizontal top strip, left to right, with a separator before Price history.
     w = window(lua)
+    row = [t for t in lua_to_py_list(w.tabs) if t.shown] + [w.historyTab]
+    assert w.tabSep.shown and row[-1].text == "Price history"
+    xs = [last_point(t)[4] for t in row]
+    assert xs == sorted(xs) and all(last_point(t)[5] == -36 for t in row), xs
+    assert all(64 <= t.width <= w.maxTabWidth for t in row)
+
+    # Close button hides the window; dragging saves the position.
+    click(w.close)
+    assert not w.shown
+    slash(lua, "show")
     w.scripts.OnDragStop(w)
     assert account(lua)["ui"]["point"] == ["TOPLEFT", "TOPLEFT", 300, -200]
     slash(lua, "status")
@@ -841,46 +945,54 @@ def test_lists_window_resize():
     load_addon(lua, data=app_data())
     slash(lua, "show")
     w = window(lua)
-    assert (w.width, w.height) == (640, 462) and len(lua_to_py_list(w.rows)) == 16
-    assert w.rows[1].info.width == 236
+    # 16 rows of 24 inside the dark inset body (98px header + 44px footer + 8px row padding).
+    assert (w.width, w.height) == (760, 534) and len(lua_to_py_list(w.rows)) == 16
+    assert w.rows[1].info.width == 250
     click(w.tabs[2])
     assert len(visible(lua)) == 16 and w.slider.high == 34 - 16
 
-    # Larger: more rows (made when needed), a wider info column, fewer to scroll.
+    # Larger: more rows (made when needed), a wider info column, fewer to scroll, wider tabs.
     grip = w.grip
     grip.scripts.OnMouseDown(grip, "LeftButton")
-    resize(w, 900, 662)
+    resize(w, 960, 702)
     grip.scripts.OnMouseUp(grip, "LeftButton")
-    assert account(lua)["ui"]["size"] == [900, 662]
-    assert len(visible(lua)) == 26 and w.slider.high == 34 - 26 and w.rows[1].info.width == 366
+    assert account(lua)["ui"]["size"] == [960, 702]
+    assert len(visible(lua)) == 23 and w.slider.high == 34 - 23 and w.rows[1].info.width == 346
 
-    # The price history uses the room: a wider result list, more result rows and a larger plot.
+    # The price history uses the room: wider result list, more result rows, larger chart card.
+    # Panel area: 960 - 20 = 940 wide, 702 - 142 = 560 high.
     slash(lua, "price Peacebloom")
     h = history_panel(lua)
-    assert h.plot.width == 876 - 279 - 76 - 4 and h.plot.height == 662 - 120 - 132, (h.plot.width, h.plot.height)
-    assert h.rows[1].width == 279 and len(lua_to_py_list(h.rows)) == 24
+    assert h.list.width == 286 and h.rows[1].width == 286 - 14 and len(lua_to_py_list(h.rows)) == 22
+    assert h.frame.width == 940 - 296 and h.frame.height == 560 - 110
+    assert h.plot.width == (940 - 296) - 68 - 16 and h.plot.height == (560 - 110) - 38
     assert h.plot.lines.used == 2 and h.plot.textures["items"][1].width == h.plot.width
-    resize(w, 640, 462)
-    assert h.plot.width == 322 and h.plot.height == 210 and h.plot.textures["items"][1].width == 322
-    resize(w, 900, 662)
+    resize(w, 760, 534)
+    assert h.plot.width == (740 - 246) - 68 - 16 and h.plot.height == (392 - 110) - 38
+    assert len([line for line in lua_to_py_list(h.rows) if line.shown]) <= 15
+    resize(w, 960, 702)
 
     # The size survives a /reload; a right-click on the grip goes back to the default size.
     load_addon(lua, data=app_data())
     slash(lua, "show")
     w = window(lua)
-    assert (w.width, w.height) == (900, 662) and len(visible(lua)) == 0, "the price history tab is open"
+    assert (w.width, w.height) == (960, 702) and len(visible(lua)) == 0, "the price history tab is open"
     click(w.tabs[2])
-    assert len(visible(lua)) == 26
+    assert len(visible(lua)) == 23
     w.grip.Click(w.grip, "RightButton")
-    assert (w.width, w.height) == (640, 462) and len(visible(lua)) == 16 and "size" not in account(lua)["ui"]
+    assert (w.width, w.height) == (760, 534) and len(visible(lua)) == 16 and "size" not in account(lua)["ui"]
     assert not any(line.shown for line in lua_to_py_list(w.rows)[16:])
 
-    # A broken size in the settings is clamped to the bounds.
+    # A broken size in the settings is clamped to the bounds; at the smallest width the tabs still fit.
     lua.execute("WoWMCP_Account.ui.size = { 5000, 10 }")
     load_addon(lua, data=app_data())
     slash(lua, "show")
     w = window(lua)
-    assert (w.width, w.height) == (1600, 400) and len(lua_to_py_list(w.rows)) == 12
+    assert (w.width, w.height) == (1600, 420) and len(lua_to_py_list(w.rows)) == 11
+    resize(w, 640, 420)
+    row = [t for t in lua_to_py_list(w.tabs) if t.shown] + [w.historyTab]
+    rightEdge = last_point(row[-1])[4] + row[-1].width
+    assert rightEdge <= 640 - 10, (rightEdge, [t.width for t in row])
     assert char(lua)["errors"] == {}
     print("ok test_lists_window_resize")
 
@@ -1074,7 +1186,7 @@ def history_panel(lua):
 def type_in(lua, text):
     box = history_panel(lua).box
     box.SetText(box, text)
-    box.hooks.OnTextChanged(box, True)
+    box.scripts.OnTextChanged(box, True)
 
 
 def results(lua):
@@ -1101,13 +1213,16 @@ def test_price_history():
     slash(lua, "price")
     w = window(lua)
     h = history_panel(lua)
-    assert w.shown and h.shown and w.historyTab.locked and w.historyTab.text == "Price history"
-    assert not any(t.locked for t in lua_to_py_list(w.tabs)) and not w.buy.shown and not w.empty.shown
+    assert w.shown and h.shown and w.historyTab.selected and w.historyTab.text == "Price history"
+    assert w.historyTab.bar.shown and "no /reload" in w.note.text and not w.body.shown
+    assert not any(t.selected for t in lua_to_py_list(w.tabs)) and not w.buy.shown and not w.empty.shown
     assert visible(lua) == [] and account(lua)["ui"]["tab"] == "history"
     assert h.status.text == "type at least two letters" and h.plot.empty.text.startswith("Search for an item")
+    assert h.placeholder.shown and not h.clearBtn.shown and not h.searchBtn.shown
 
     # Any case; one hit opens itself.
     type_in(lua, "PEACE")
+    assert not h.placeholder.shown and h.clearBtn.shown and h.searchBtn.shown
     assert results(lua) == ["|cff1eff00Peacebloom|r"], results(lua)
     assert h.status.text == "1 items · loading 2 names from the server", h.status.text
     assert h.title.text == "|cff1eff00Peacebloom|r" and h.item.shown
@@ -1123,22 +1238,24 @@ def test_price_history():
     assert "|cffffd700g|r" not in "".join(labels[:4]) and "|cffc7c7cfs|r" in labels[3], labels
 
     # The mouse over day 97: lowest and highest minimum price and the offers of that day.
-    lua.execute("cursorX = 100 + 2.5 * 322 / 6")
+    lua.execute(f"cursorX = 100 + 2.5 * {plot.width} / 6")
     plot.GetLeft = lua.eval("function() return 100 end")
     plot.scripts.OnEnter(plot)
     plot.scripts.OnUpdate(plot)
     tip = lua_to_py(lua.globals().GameTooltip.lines)
     assert tip[1:] == ["Lowest price: 0g 3s 50c", "Highest minimum price: 0g 4s 20c", "Offers: 12"], tip
-    assert plot.marker.shown
+    assert plot.marker.shown and plot.hoverDot.shown
     plot.scripts.OnLeave(plot)
-    assert not plot.marker.shown
+    assert not plot.marker.shown and not plot.hoverDot.shown
 
     # Every word must be in the name; shorter names first.
     type_in(lua, "of t")
     assert results(lua) == ["|cff1eff00Hat of Testing|r", "|cff0070ddRobe of Export|r", "|cff1eff00Staff of Waiting|r"], results(lua)
     assert h.status.text.startswith("3 items")
     click(h.rows[3])
-    assert h.title.text.endswith("Staff of Waiting|r") and h.rows[3].locked and not h.rows[1].locked
+    assert h.title.text.endswith("Staff of Waiting|r") and h.rows[3].selected and not h.rows[1].selected
+    assert h.rows[3].sel.shown and h.rows[3].selBar.shown and not h.rows[1].sel.shown and h.rows[2].stripe.shown and not h.rows[3].stripe.shown
+    assert h.item.icon.texture == 131002 and h.item.icon.border.shown, "uncommon and better get a border"
     assert h.change.text.startswith("1 scan days") and h.change.text.endswith("change ±0%"), h.change.text
     type_in(lua, "#2447")
     assert h.title.text == "|cff1eff00Peacebloom|r"
@@ -1198,6 +1315,10 @@ def test_price_history():
     lua.execute("AuctionHouseFrame.shown = true")
     click(h.item)
     assert lua_to_py(lua.globals().searches)[-1] == ["Peacebloom"]
+    click(h.searchBtn)
+    assert lua_to_py(lua.globals().searches)[-1] == ["Peacebloom"] and len(lua_to_py(lua.globals().searches)) == 2
+    click(h.clearBtn)
+    assert h.box.text == "" and h.placeholder.shown and not h.clearBtn.shown
 
     # A list tab brings the rows back; right-click on a row of a list opens its history.
     click(w.tabs[3])
@@ -1214,7 +1335,7 @@ def test_price_history():
     load_addon(lua, data=app_data())
     slash(lua, "price Peacebloom")
     h = history_panel(lua)
-    assert window(lua).historyTab.locked and h.box.text == "Peacebloom" and h.title.text == "|cff1eff00Peacebloom|r"
+    assert window(lua).historyTab.selected and h.box.text == "Peacebloom" and h.title.text == "|cff1eff00Peacebloom|r"
     slash(lua, "price 1001")
     assert h.title.text.endswith("Hat of Testing|r")
     slash(lua, "ah ON")
@@ -1253,7 +1374,15 @@ def test_lists_in_german():
     load_addon(lua, data=app_data())
     slash(lua, "show")
     w = window(lua)
-    assert w.rows[1].search.text == "Suchen" and w.buy.text == "Einkaufsliste suchen" and w.auto.Text.text == "Mit dem Auktionshaus öffnen"
+    assert w.buy.text == "Einkaufsliste suchen" and w.auto.Text.text == "Mit dem Auktionshaus öffnen"
+    assert [t.text for t in lua_to_py_list(w.tabs) if t.shown] + [w.historyTab.text] == [
+        "AH upgrades", "Writs", "Nothing to buy", "Preisverlauf"], "list titles come from the app"
+    # The magnifier of a section and the check box explain themselves on hover.
+    search = w.rows[1].search
+    search.scripts.OnEnter(search)
+    assert lua_to_py(lua.globals().GameTooltip.lines) == ["Suchen", "Sucht alle Items dieses Abschnitts im Auktionshaus. Braucht Auctionator."]
+    w.auto.scripts.OnEnter(w.auto)
+    assert lua_to_py(lua.globals().GameTooltip.lines)[1].startswith("Öffnet dieses Fenster")
     assert w.sub.text.startswith("AH-Scan 2026-11-18, berechnet ")
     lua.execute("advance(2)")
     assert printed(lua)[-1].endswith("2 Auctionator-Einkaufslisten aktualisiert.")
@@ -1284,9 +1413,9 @@ def test_locales():
     for cmd in ("status", "help", "auto on", "items"):
         lua.globals().SlashCmdList.WOWMCP(cmd)
     out = "\n".join(printed(lua))
-    assert "letzter Snapshot" in out and "Bank: nie gescannt" in out and "ist an (/wowmcp auto on|off)" in out, out
+    assert "Charakter zuletzt eingelesen" in out and "Bank: nie gescannt" in out and "ist an (/wowmcp auto on|off)" in out, out
     assert "Münzbeutel 284583: 1x geöffnet, Schnitt 33.50s" in out, out
-    assert "lese 2 neue Items" in out and "/wowmcp sync - Snapshot und /reload" in out, out
+    assert "lese 2 neue Items" in out and "/wowmcp sync - Charakter jetzt einlesen und /reload" in out, out
     assert "/wowmcp show - die Listen der App" in out and "Listen der App: keine" in out, out
     print("ok test_locales")
 
@@ -1307,6 +1436,7 @@ def test_toc():
 
 if __name__ == "__main__":
     test_snapshot()
+    test_stats_in_an_instance()
     test_combat_and_bank()
     test_payouts()
     test_recipes_and_vendor()

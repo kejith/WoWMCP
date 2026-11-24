@@ -213,6 +213,25 @@ local function percent(v)
     if num(v) then return math.floor(v * 1000 + 0.5) / 10 end
 end
 
+-- In a dungeon or a raid the client keeps the character's stats secret: the calls answer with secret
+-- values, which collectStats leaves out, so a snapshot taken there has health and mana but neither
+-- attributes nor spell power, and everything the app computes from it would count them as 0. Such a
+-- snapshot keeps the stats of the last one taken outside, with the buffs they include.
+-- `statsUpdated` says when the stats were read, `statsKept` that they are older than the snapshot.
+local function keepStats(c)
+    local s = c.stats
+    if s.stamina or s.intellect then
+        c.statsUpdated = time()
+        return
+    end
+    local old = WoWMCP_Char and WoWMCP_Char.character
+    local kept = type(old) == "table" and old.stats
+    if type(kept) == "table" and (kept.stamina or kept.intellect) then
+        c.stats, c.buffs = kept, old.buffs
+        c.statsUpdated, c.statsKept = old.statsUpdated or WoWMCP_Char.updated, true
+    end
+end
+
 local function collectCharacter()
     local first, surname = UnitName("player")
     local className, classFile = UnitClass("player")
@@ -240,6 +259,7 @@ local function collectCharacter()
         stats = collectStats(),
         buffs = collectBuffs(),
     }
+    keepStats(c)
     local mapID = try(C_Map.GetBestMapForUnit, "player")
     if mapID then
         local info = try(C_Map.GetMapInfo, mapID)
@@ -1091,11 +1111,11 @@ local function runAppRequest()
     local last = WoWMCP_Account.lastRequest
     if type(last) == "table" and last.id == req.id then return end
     if req.action == "items" then
-        say("requestItems", req.id)
+        say("requestItems")
         startItemRun({ full = req.full == true, items = type(req.items) == "table" and req.items or nil,
                        requestID = req.id })
     elseif req.action == "sync" then
-        say("requestSync", req.id)
+        say("requestSync")
         snapshot()
         WoWMCP_Account.lastRequest = { id = req.id, action = "sync", done = time() }
         say("snapshotReady")
