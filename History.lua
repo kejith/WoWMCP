@@ -1,4 +1,4 @@
--- WoWMCP price history: a tab of the lists window that searches the items in Auctionator's price database
+-- WoW Tools Forever price history: a tab of the lists window that searches the items in Auctionator's price database
 -- and draws how their price developed. Auctionator keeps per item and scan day the lowest (l) and the
 -- highest (h) minimum buyout it saw and the most offers (a), plus the last minimum price (m); days count
 -- from Auctionator.Constants.SCAN_DAY_0. Everything is read in the game: no app, no /reload needed.
@@ -87,11 +87,11 @@ local function setName(id, name)
     index.names[id], index.lower[id] = name, lower(name)
 end
 
--- The item export of this addon (WoWMCP_Items) holds name and quality of the equipment seen in the auction
+-- The item export of this addon (WoWToolsForever_Items) holds name and quality of the equipment seen in the auction
 -- house. Many of these items are not in the client's files, so the client knows their names only after
 -- asking the server; the export has them at once. Only an export in the client's language counts.
 local function exported(id)
-    local store = WoWMCP_Items
+    local store = WoWToolsForever_Items
     if type(store) ~= "table" or type(store.items) ~= "table" or (store.locale and store.locale ~= GetLocale()) then
         return nil
     end

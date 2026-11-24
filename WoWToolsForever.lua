@@ -1,4 +1,4 @@
--- WoWMCP: snapshots character state into per-character SavedVariables for an external MCP server.
+-- WoW Tools Forever: snapshots character state into per-character SavedVariables for an external MCP server.
 -- Target: WoW Forever (Interface 16001, Mainline API family). Addons cannot do network or file I/O,
 -- so the snapshot reaches disk only when the client writes SavedVariables on /reload or logout.
 
@@ -26,7 +26,7 @@ end
 
 -- Chat output in the language of the client (Locales.lua).
 local function say(key, ...)
-    print("|cffffd100WoWMCP:|r " .. L[key]:format(...))
+    print("|cffffd100WoW Tools Forever:|r " .. L[key]:format(...))
 end
 
 -- Calls fn protected; returns its results, or nothing if fn is missing or raises.
@@ -224,11 +224,11 @@ local function keepStats(c)
         c.statsUpdated = time()
         return
     end
-    local old = WoWMCP_Char and WoWMCP_Char.character
+    local old = WoWToolsForever_Char and WoWToolsForever_Char.character
     local kept = type(old) == "table" and old.stats
     if type(kept) == "table" and (kept.stamina or kept.intellect) then
         c.stats, c.buffs = kept, old.buffs
-        c.statsUpdated, c.statsKept = old.statsUpdated or WoWMCP_Char.updated, true
+        c.statsUpdated, c.statsKept = old.statsUpdated or WoWToolsForever_Char.updated, true
     end
 end
 
@@ -365,7 +365,7 @@ local bankOpen = false
 
 -- Bank contents are only readable while the bank is open; the last scan persists across sessions.
 local function scanBank()
-    local db = WoWMCP_Char
+    local db = WoWToolsForever_Char
     local containers = {}
     for _, bag in ipairs(bagIDs(isCharacterBank)) do
         containers[#containers + 1] = scanContainer(bag)
@@ -592,7 +592,7 @@ end
 
 ---------------------------------------------------------------------------------------------------
 -- Recipes: read while the player's own profession window is open (the trade skill API only has data
--- then). Stored per profession in WoWMCP_Char.recipes[skillLineID], so each window opened once is enough.
+-- then). Stored per profession in WoWToolsForever_Char.recipes[skillLineID], so each window opened once is enough.
 ---------------------------------------------------------------------------------------------------
 
 local function professionInfo()
@@ -648,7 +648,7 @@ local function scanTradeSkill()
             recipes[id] = rec
         end
     end
-    local db = WoWMCP_Char
+    local db = WoWToolsForever_Char
     db.recipes = type(db.recipes) == "table" and db.recipes or {}
     -- The DB2 tables list recipes under the base skill line (171 = Alchemy), so that is the key.
     local key = (base and num(base.professionID) and base.professionID ~= 0) and base.professionID
@@ -674,7 +674,7 @@ local function requestTradeSkillScan()
     C_Timer.After(1, function()
         tradeSkillPending = false
         local ok, err = pcall(scanTradeSkill)
-        WoWMCP_Char.errors.recipes = (not ok) and tostring(err) or nil
+        WoWToolsForever_Char.errors.recipes = (not ok) and tostring(err) or nil
     end)
 end
 
@@ -682,14 +682,14 @@ end
 local function scanMerchant()
     local n = num(try(GetMerchantNumItems)) or 0
     if n == 0 then return end
-    WoWMCP_Account.vendor = type(WoWMCP_Account.vendor) == "table" and WoWMCP_Account.vendor or {}
+    WoWToolsForever_Account.vendor = type(WoWToolsForever_Account.vendor) == "table" and WoWToolsForever_Account.vendor or {}
     local npc = str(UnitName("npc"))
     for index = 1, n do
         local info = try(C_MerchantFrame.GetItemInfo, index)
         local id = num(try(GetMerchantItemID, index))
         if info and id and num(info.price) and info.price > 0 and not info.hasExtendedCost then
             local stack = math.max(1, num(info.stackCount) or 1)
-            WoWMCP_Account.vendor[id] = {
+            WoWToolsForever_Account.vendor[id] = {
                 price = info.price / stack,
                 npc = npc,
                 limited = (num(info.numAvailable) or -1) >= 0 or nil,
@@ -705,7 +705,7 @@ end
 -- Sealed crates pay Merchant's Favor on turn-in. The two halves of each payout arrive as separate
 -- events in no fixed order (bag change, money or currency change, quest turn-in), so each half is
 -- kept for PAIR_SECONDS and recorded once the matching half shows up. Stored account-wide in
--- WoWMCP_Account.payouts: pouches[itemID] / crates[itemID] = {n, sum, min, max, last, updated},
+-- WoWToolsForever_Account.payouts: pouches[itemID] / crates[itemID] = {n, sum, min, max, last, updated},
 -- writQuests[questID] = {pouch, money, n, updated}.
 ---------------------------------------------------------------------------------------------------
 
@@ -721,11 +721,11 @@ local lastMoney
 local pend = {}
 
 local function payouts()
-    local p = type(WoWMCP_Account.payouts) == "table" and WoWMCP_Account.payouts or {}
+    local p = type(WoWToolsForever_Account.payouts) == "table" and WoWToolsForever_Account.payouts or {}
     p.pouches = type(p.pouches) == "table" and p.pouches or {}
     p.crates = type(p.crates) == "table" and p.crates or {}
     p.writQuests = type(p.writQuests) == "table" and p.writQuests or {}
-    WoWMCP_Account.payouts = p
+    WoWToolsForever_Account.payouts = p
     return p
 end
 
@@ -897,7 +897,7 @@ local SECTIONS = {
 
 -- A failing section keeps its previous data and records the error for the server to report.
 local function snapshot()
-    local db = WoWMCP_Char
+    local db = WoWToolsForever_Char
     for key, collect in pairs(SECTIONS) do
         local ok, result = pcall(collect)
         if ok and result ~= nil then
@@ -938,8 +938,8 @@ local function requestSnapshot()
 end
 
 ---------------------------------------------------------------------------------------------------
--- Item export ("/wowmcp items"): stats and tooltip text for equippable items seen in the auction house.
--- Account-wide and incremental: WoWMCP_Items keeps every item already read for the current client
+-- Item export ("/wtf items"): stats and tooltip text for equippable items seen in the auction house.
+-- Account-wide and incremental: WoWToolsForever_Items keeps every item already read for the current client
 -- build, so a run after the next AH scan only asks the server for items it has not seen yet.
 ---------------------------------------------------------------------------------------------------
 
@@ -1004,12 +1004,12 @@ end
 -- language changes. Exports from before 1.6 carry no locale and are taken as the current one.
 local function itemStore()
     local build, locale = clientBuild(), GetLocale()
-    if type(WoWMCP_Items) == "table" and WoWMCP_Items.locale == nil then WoWMCP_Items.locale = locale end
-    if type(WoWMCP_Items) ~= "table" or WoWMCP_Items.build ~= build or WoWMCP_Items.locale ~= locale then
-        WoWMCP_Items = { build = build, locale = locale, items = {} }
+    if type(WoWToolsForever_Items) == "table" and WoWToolsForever_Items.locale == nil then WoWToolsForever_Items.locale = locale end
+    if type(WoWToolsForever_Items) ~= "table" or WoWToolsForever_Items.build ~= build or WoWToolsForever_Items.locale ~= locale then
+        WoWToolsForever_Items = { build = build, locale = locale, items = {} }
     end
-    WoWMCP_Items.items = type(WoWMCP_Items.items) == "table" and WoWMCP_Items.items or {}
-    return WoWMCP_Items
+    WoWToolsForever_Items.items = type(WoWToolsForever_Items.items) == "table" and WoWToolsForever_Items.items or {}
+    return WoWToolsForever_Items
 end
 
 local function finishItemRun()
@@ -1025,7 +1025,7 @@ local function finishItemRun()
     store.updated, store.missing, store.count, store.source = time(), missing, count, run.source
     store.lastRun = { new = run.done, total = run.total, missing = #missing, started = run.started }
     if run.requestID then
-        WoWMCP_Account.lastRequest = { id = run.requestID, action = "items", done = time(), new = run.done }
+        WoWToolsForever_Account.lastRequest = { id = run.requestID, action = "items", done = time(), new = run.done }
     end
     if not run.quiet or run.done > 0 then
         say("itemsDone", run.done, count, #missing)
@@ -1102,13 +1102,13 @@ end
 
 ---------------------------------------------------------------------------------------------------
 -- App requests: the desktop app writes AppRequest.lua into this folder; the client loads it on the
--- next /reload. A request runs once, its id is remembered in WoWMCP_Account.lastRequest.
+-- next /reload. A request runs once, its id is remembered in WoWToolsForever_Account.lastRequest.
 ---------------------------------------------------------------------------------------------------
 
 local function runAppRequest()
-    local req = WoWMCP_AppRequest
+    local req = WoWToolsForever_AppRequest
     if type(req) ~= "table" or type(req.id) ~= "number" then return end
-    local last = WoWMCP_Account.lastRequest
+    local last = WoWToolsForever_Account.lastRequest
     if type(last) == "table" and last.id == req.id then return end
     if req.action == "items" then
         say("requestItems")
@@ -1117,10 +1117,10 @@ local function runAppRequest()
     elseif req.action == "sync" then
         say("requestSync")
         snapshot()
-        WoWMCP_Account.lastRequest = { id = req.id, action = "sync", done = time() }
+        WoWToolsForever_Account.lastRequest = { id = req.id, action = "sync", done = time() }
         say("snapshotReady")
     else
-        WoWMCP_Account.lastRequest = { id = req.id, action = tostring(req.action), done = time(), error = "unknown action" }
+        WoWToolsForever_Account.lastRequest = { id = req.id, action = tostring(req.action), done = time(), error = "unknown action" }
     end
 end
 
@@ -1154,12 +1154,12 @@ for _, event in ipairs({ "ADDON_LOADED", "PLAYER_REGEN_ENABLED", "AUCTION_HOUSE_
 end
 
 local function initSavedVariables()
-    WoWMCP_Char = type(WoWMCP_Char) == "table" and WoWMCP_Char or {}
-    WoWMCP_Char.errors = type(WoWMCP_Char.errors) == "table" and WoWMCP_Char.errors or {}
-    WoWMCP_Account = type(WoWMCP_Account) == "table" and WoWMCP_Account or {}
-    if WoWMCP_Account.autoItems == nil then WoWMCP_Account.autoItems = true end
+    WoWToolsForever_Char = type(WoWToolsForever_Char) == "table" and WoWToolsForever_Char or {}
+    WoWToolsForever_Char.errors = type(WoWToolsForever_Char.errors) == "table" and WoWToolsForever_Char.errors or {}
+    WoWToolsForever_Account = type(WoWToolsForever_Account) == "table" and WoWToolsForever_Account or {}
+    if WoWToolsForever_Account.autoItems == nil then WoWToolsForever_Account.autoItems = true end
     -- 1.0 kept the item export per character; move it into the shared export once.
-    local old = WoWMCP_Char.itemInfo
+    local old = WoWToolsForever_Char.itemInfo
     if type(old) == "table" and type(old.items) == "table" then
         local store = itemStore()
         for id, rec in pairs(old.items) do
@@ -1167,7 +1167,7 @@ local function initSavedVariables()
         end
         store.updated = store.updated or old.updated
     end
-    WoWMCP_Char.itemInfo = nil
+    WoWToolsForever_Char.itemInfo = nil
 end
 
 local enteredWorld = false
@@ -1178,7 +1178,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3)
             initSavedVariables()
             frame:UnregisterEvent("ADDON_LOADED")
         end
-    elseif not WoWMCP_Char then
+    elseif not WoWToolsForever_Char then
         return
     -- No snapshot on PLAYER_LOGOUT: by then the client has torn down money, XP, stats, inventory
     -- and talents (they read as 0/empty), so it would overwrite the last good snapshot.
@@ -1186,7 +1186,7 @@ frame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3)
         if dirty then requestSnapshot() end
     elseif event == "AUCTION_HOUSE_CLOSED" then
         -- Auctionator has just stored the scan; read the items it found that are not in the export yet.
-        if WoWMCP_Account.autoItems then
+        if WoWToolsForever_Account.autoItems then
             C_Timer.After(1, function() startItemRun({ quiet = true }) end)
         end
     elseif event == "BANKFRAME_OPENED" then
@@ -1227,28 +1227,34 @@ local function countItems()
     return n
 end
 
-SLASH_WOWMCP1 = "/wowmcp"
-SlashCmdList.WOWMCP = function(msg)
+local function syncNow()
+    snapshot()
+    dirty = false
+    if C_UI and C_UI.Reload then C_UI.Reload() else ReloadUI() end
+end
+ns.sync = syncNow
+ns.version = ADDON_VERSION
+
+SLASH_WOWTOOLSFOREVER1 = "/wtf"
+SlashCmdList.WOWTOOLSFOREVER = function(msg)
     local cmd, raw = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
     cmd = cmd:lower()
     local arg = raw:lower() -- the window's commands get the text as typed (item names)
-    local db = WoWMCP_Char
+    local db = WoWToolsForever_Char
     if cmd == "sync" then
-        snapshot()
-        dirty = false
-        if C_UI and C_UI.Reload then C_UI.Reload() else ReloadUI() end
+        syncNow()
     elseif cmd == "items" then
         startItemRun({ full = arg == "full" })
     elseif cmd == "auto" then
-        if arg == "on" or arg == "off" then WoWMCP_Account.autoItems = arg == "on" end
-        say("autoState", WoWMCP_Account.autoItems and L.on or L.off)
+        if arg == "on" or arg == "off" then WoWToolsForever_Account.autoItems = arg == "on" end
+        say("autoState", WoWToolsForever_Account.autoItems and L.on or L.off)
     elseif cmd == "status" then
         local function at(t, fmt) return t and date(fmt or "%Y-%m-%d %H:%M", t) end
         print(L.statusSnapshot:format(ADDON_VERSION, at(db.updated, "%Y-%m-%d %H:%M:%S") or L.never))
         print(L.statusBank:format(db.bank and at(db.bank.updated) or L.bankNever))
         local store = itemStore()
         print(L.statusItems:format(countItems(), at(store.updated) or L.itemsNever,
-            WoWMCP_Account.autoItems and L.on or L.off))
+            WoWToolsForever_Account.autoItems and L.on or L.off))
         for _, p in pairs(db.recipes or {}) do
             print(L.statusRecipes:format(tostring(p.name), p.learned or 0, at(p.updated) or "?"))
         end
@@ -1260,7 +1266,7 @@ SlashCmdList.WOWMCP = function(msg)
         for id, s in pairs(p.crates) do
             print(L.statusCrate:format(id, s.n, ("%.1f"):format(s.sum / s.n)))
         end
-        local last = WoWMCP_Account.lastRequest
+        local last = WoWToolsForever_Account.lastRequest
         if type(last) == "table" then
             print(L.statusRequest:format(tostring(last.id), tostring(last.action), at(last.done, "%H:%M") or L.running))
         end
@@ -1272,7 +1278,7 @@ SlashCmdList.WOWMCP = function(msg)
         ns.commands[cmd](raw) -- the window and its switches, Lists.lua
     else
         for _, key in ipairs({ "helpSync", "helpItems", "helpAuto", "helpStatus", "helpShow", "helpPrice",
-                               "helpLists", "helpTips", "helpAH", "helpRecipes", "helpPayouts" }) do
+                               "helpLists", "helpTips", "helpAH", "helpMinimap", "helpRecipes", "helpPayouts" }) do
             say(key)
         end
     end

@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  ADDON: WoWMCP
+  ADDON: WoWToolsForever
 
 jobs:
   test:

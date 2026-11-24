@@ -1,5 +1,5 @@
 # Packaging for CurseForge, Wago and GitHub releases (https://github.com/BigWigsMods/packager).
-package-as: WoWMCP
+package-as: WoWToolsForever
 enable-nolib-creation: no
 
 optional-dependencies:
@@ -8,4 +8,5 @@ optional-dependencies:
 ignore:
   - README.md
   - CONTRIBUTING.md
+  - GEMINI.md
   - tests

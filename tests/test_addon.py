@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["lupa>=2.0"]
 # ///
-"""Tests for WoWMCP without the game: the addon runs in Lua against a stubbed WoW API.
+"""Tests for WoWToolsForever without the game: the addon runs in Lua against a stubbed WoW API.
 
     uv run tests/test_addon.py
 
@@ -17,7 +17,7 @@ from lupa.lua54 import LuaRuntime, lua_type
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
-NAME = "WoWMCP"
+NAME = "WoWToolsForever"
 
 
 def read(name):
@@ -187,6 +187,12 @@ function fire(event, ...)
   end
 end
 UIParent, UISpecialFrames = widget("Frame", "UIParent"), {}
+Minimap = widget("Frame", "Minimap", UIParent)
+Minimap.width, Minimap.height = 140, 140
+function Minimap:GetCenter() return 1000, 700 end
+function Minimap:GetEffectiveScale() return 1 end
+shiftDown = false
+function IsShiftKeyDown() return shiftDown end
 
 -- Tooltips keep their lines; showing an item runs the hooks addons registered for item tooltips.
 local function tooltipStub(name)
@@ -223,7 +229,7 @@ function hooksecurefunc(t, name, fn)
   t[name] = function(...) local r = original(...) fn(...) return r end
 end
 ChatFrameUtil = { InsertLink = function() return false end }
-function GetCursorPosition() return cursorX or 0, 0 end
+function GetCursorPosition() return cursorX or 0, cursorY or 0 end
 
 -- The auction house and Auctionator's API for other addons. Shopping lists live in `shopping`, as they
 -- do in Auctionator's SavedVariables: they survive a /reload.
@@ -513,23 +519,23 @@ def load_addon(lua, request=None, enter=True, data=None):
     ns = lua.table()
     for name in toc()[1]:
         if name == "AppRequest.lua":
-            lua.execute(f"WoWMCP_AppRequest = {request or 'nil'}")
+            lua.execute(f"WoWToolsForever_AppRequest = {request or 'nil'}")
         elif name == "AppData.lua":
-            lua.execute(f"WoWMCP_AppData = {data or 'nil'}")
+            lua.execute(f"WoWToolsForever_AppData = {data or 'nil'}")
         else:
             load(read(name), name)(NAME, ns)
-    lua.execute('fire("ADDON_LOADED", "WoWMCP")')
+    lua.execute('fire("ADDON_LOADED", "WoWToolsForever")')
     if enter:
         lua.execute('fire("PLAYER_LOGIN"); fire("PLAYER_ENTERING_WORLD", true, false); advance(4)')
     return ns
 
 
 def char(lua):
-    return lua_to_py(lua.globals().WoWMCP_Char)
+    return lua_to_py(lua.globals().WoWToolsForever_Char)
 
 
 def account(lua):
-    return lua_to_py(lua.globals().WoWMCP_Account)
+    return lua_to_py(lua.globals().WoWToolsForever_Account)
 
 
 def printed(lua):
@@ -724,9 +730,9 @@ def test_recipes_and_vendor():
 def test_item_export():
     lua = new_runtime()
     load_addon(lua)
-    lua.globals().SlashCmdList.WOWMCP("items")
+    lua.globals().SlashCmdList.WOWTOOLSFOREVER("items")
     lua.execute("advance(2)")
-    store = lua_to_py(lua.globals().WoWMCP_Items)
+    store = lua_to_py(lua.globals().WoWToolsForever_Items)
     # Equippable items of the last scan days; 1002 arrives from the server one tick after it was requested.
     assert sorted(store["items"]) == [1001, 1002] and store["count"] == 2 and store["missing"] in ([], {})
     assert (store["build"], store["locale"], store["source"]) == (70938, "enUS", "auctionator")
@@ -736,21 +742,21 @@ def test_item_export():
 
     # Closing the auction house exports only what is new, and stays quiet when there is nothing.
     lua.execute('printed = {}; fire("AUCTION_HOUSE_CLOSED"); advance(3)')
-    assert printed(lua) == [] and lua_to_py(lua.globals().WoWMCP_Items)["lastRun"]["new"] == 0
-    lua.globals().SlashCmdList.WOWMCP("auto off")
+    assert printed(lua) == [] and lua_to_py(lua.globals().WoWToolsForever_Items)["lastRun"]["new"] == 0
+    lua.globals().SlashCmdList.WOWTOOLSFOREVER("auto off")
     assert account(lua)["autoItems"] is False and "is off" in printed(lua)[-1]
 
     # Another client language: names and tooltips would be mixed, so the export starts over.
     lua.execute('locale = "deDE"')
     load_addon(lua)
-    lua.globals().SlashCmdList.WOWMCP("status")
-    store = lua_to_py(lua.globals().WoWMCP_Items)
+    lua.globals().SlashCmdList.WOWTOOLSFOREVER("status")
+    store = lua_to_py(lua.globals().WoWToolsForever_Items)
     assert store["locale"] == "deDE" and store["items"] in ([], {})
     # An export from before 1.6 has no locale and is kept.
-    lua.execute("WoWMCP_Items = { build = 70938, items = { [1001] = { name = 'Hut' } } }")
+    lua.execute("WoWToolsForever_Items = { build = 70938, items = { [1001] = { name = 'Hut' } } }")
     load_addon(lua)
-    lua.globals().SlashCmdList.WOWMCP("status")
-    store = lua_to_py(lua.globals().WoWMCP_Items)
+    lua.globals().SlashCmdList.WOWTOOLSFOREVER("status")
+    store = lua_to_py(lua.globals().WoWToolsForever_Items)
     assert store["locale"] == "deDE" and 1001 in store["items"]
     print("ok test_item_export")
 
@@ -771,8 +777,8 @@ def test_app_requests():
     assert (last["id"], last["action"], last["new"]) == (6, "items", 2), last
     load_addon(lua, '{ id = 7, action = "explode" }')
     assert account(lua)["lastRequest"]["error"] == "unknown action"
-    # /wowmcp sync takes a snapshot and reloads.
-    lua.globals().SlashCmdList.WOWMCP("sync")
+    # /wtf sync takes a snapshot and reloads.
+    lua.globals().SlashCmdList.WOWTOOLSFOREVER("sync")
     assert lua.globals().reloaded is True
     print("ok test_app_requests")
 
@@ -810,7 +816,7 @@ def app_data(hash_="h1", writ_shop="true", extra=""):
 
 
 def window(lua):
-    return lua.globals().WoWMCPListFrame
+    return lua.globals().WoWToolsForeverListFrame
 
 
 def visible(lua):
@@ -846,7 +852,7 @@ def tabs(lua):
 
 
 def slash(lua, text):
-    lua.globals().SlashCmdList.WOWMCP(text)
+    lua.globals().SlashCmdList.WOWTOOLSFOREVER(text)
 
 
 def click(widget):
@@ -860,9 +866,9 @@ def test_lists_window():
     assert account(lua)["appData"] == {"generated": 1763400500, "hash": "h1", "loaded": lua.eval("time()") - 4}
     slash(lua, "show")
     w = window(lua)
-    assert w.shown and "WoWMCPListFrame" in lua_to_py(lua.globals().UISpecialFrames)
+    assert w.shown and "WoWToolsForeverListFrame" in lua_to_py(lua.globals().UISpecialFrames)
     # Modern dark stone panel: title bar with coin logo, close button, top underline tabs and note strip.
-    assert w.title.text == "WoW Forever Tools" and "Icons" in w.logo.texture and w.close.shown
+    assert w.title.text == "WoW Tools Forever" and "Media\\Icon" in w.logo.texture and w.close.shown
     assert tabs(lua) == [("AH upgrades", True), ("Writs", False), ("Nothing to buy", False)], "broken lists are skipped"
     assert w.note.text == "Budget 15g 0s 0c" and w.hint.text == ""
     assert "2026-11-18" in w.sub.text and w.empty.text == ""
@@ -984,7 +990,7 @@ def test_lists_window_resize():
     assert not any(line.shown for line in lua_to_py_list(w.rows)[16:])
 
     # A broken size in the settings is clamped to the bounds; at the smallest width the tabs still fit.
-    lua.execute("WoWMCP_Account.ui.size = { 5000, 10 }")
+    lua.execute("WoWToolsForever_Account.ui.size = { 5000, 10 }")
     load_addon(lua, data=app_data())
     slash(lua, "show")
     w = window(lua)
@@ -1058,7 +1064,7 @@ def test_lists_open_with_the_auction_house():
     lua.execute("fire('AUCTION_HOUSE_SHOW')")
     assert not w.shown
     slash(lua, "ah on")
-    assert printed(lua)[-1].endswith("is on (/wowmcp ah on|off)")
+    assert printed(lua)[-1].endswith("is on (/wtf ah on|off)")
     lua.execute("fire('AUCTION_HOUSE_SHOW')")
     assert w.shown
     print("ok test_lists_open_with_the_auction_house")
@@ -1071,8 +1077,8 @@ def test_shopping_lists():
     lua.execute("advance(2)")
     lists = lua_to_py(lua.globals().shopping)
     assert lists == {
-        "WoWMCP: AH upgrades": ['"Hat of Testing";;', '"Staff of Waiting";;'],
-        "WoWMCP: Writs": ['"Writ: Elixir | Wisdom";;', '"Peacebloom";;20'],
+        "WoW Tools Forever: AH upgrades": ['"Hat of Testing";;', '"Staff of Waiting";;'],
+        "WoW Tools Forever: Writs": ['"Writ: Elixir | Wisdom";;', '"Peacebloom";;20'],
     }, lists
     assert printed(lua)[-1].endswith("2 Auctionator shopping lists updated.")
     assert account(lua)["ui"]["synced"] == "h1:Tester"
@@ -1084,10 +1090,10 @@ def test_shopping_lists():
     # New data without anything to buy for the writs: that list goes, the other is written again.
     load_addon(lua, data=app_data("h2", writ_shop="false"))
     lua.execute("advance(2)")
-    assert list(lua_to_py(lua.globals().shopping)) == ["WoWMCP: AH upgrades"] and lua.globals().created == 3
+    assert list(lua_to_py(lua.globals().shopping)) == ["WoW Tools Forever: AH upgrades"] and lua.globals().created == 3
 
     slash(lua, "lists off")
-    assert not lua_to_py(lua.globals().shopping) and printed(lua)[-1].endswith("are off (/wowmcp lists on|off)")
+    assert not lua_to_py(lua.globals().shopping) and printed(lua)[-1].endswith("are off (/wtf lists on|off)")
     load_addon(lua, data=app_data("h3"))
     lua.execute("advance(2)")
     assert not lua_to_py(lua.globals().shopping)
@@ -1205,7 +1211,7 @@ def test_price_history():
                    items[6001] = { name = "Nameless", equipLoc = "", classID = 7, noName = true }
                    Auctionator.Database.db["6000"] = { m = 900, h = { ["100"] = 900 } }
                    Auctionator.Database.db["6001"] = { m = 10, h = { ["100"] = 10 } }
-                   WoWMCP_Items = { build = 70938, locale = "enUS", items = { [6000] = { name = "Robe of Export", quality = 3 } } }
+                   WoWToolsForever_Items = { build = 70938, locale = "enUS", items = { [6000] = { name = "Robe of Export", quality = 3 } } }
                    requested = {}
                    local request = C_Item.RequestLoadItemDataByID
                    C_Item.RequestLoadItemDataByID = function(id) requested[id] = (requested[id] or 0) + 1; request(id) end""")
@@ -1339,7 +1345,7 @@ def test_price_history():
     slash(lua, "price 1001")
     assert h.title.text.endswith("Hat of Testing|r")
     slash(lua, "ah ON")
-    assert printed(lua)[-1].endswith("is on (/wowmcp ah on|off)")
+    assert printed(lua)[-1].endswith("is on (/wtf ah on|off)")
     assert char(lua)["errors"] == {}
     print("ok test_price_history")
 
@@ -1389,6 +1395,58 @@ def test_lists_in_german():
     print("ok test_lists_in_german")
 
 
+
+def test_minimap_button():
+    lua = new_runtime()
+    load_addon(lua, data=app_data())
+    # Slash command is /wtf only; /wowmcp is removed.
+    assert lua.globals().SLASH_WOWTOOLSFOREVER1 == "/wtf"
+    assert lua.globals().SLASH_WOWMCP1 is None
+    assert lua.globals().SlashCmdList.WOWMCP is None
+
+    btn = lua.globals().WoWToolsForeverMinimapButton
+    assert btn is not None and btn.shown
+    assert "Media\\Icon" in btn.icon.texture
+
+    # Tooltip shows title and click hints.
+    btn.scripts.OnEnter(btn)
+    tip = lua_to_py(lua.globals().GameTooltip.lines)
+    assert tip[0].startswith("WoW Tools Forever"), tip
+    assert any("Left-click" in l for l in tip) and any("Right-click" in l for l in tip) and any("Shift+Right-click" in l for l in tip), tip
+    btn.scripts.OnLeave(btn)
+
+    # Left-click toggles the lists window.
+    btn.Click(btn, "LeftButton")
+    assert window(lua).shown
+    btn.Click(btn, "LeftButton")
+    assert not window(lua).shown
+
+    # Right-click opens Price history tab.
+    btn.Click(btn, "RightButton")
+    assert window(lua).shown and window(lua).historyTab.selected
+
+    # Shift+Right-click triggers sync + reload.
+    lua.execute("reloaded = false; shiftDown = true")
+    btn.Click(btn, "RightButton")
+    lua.execute("shiftDown = false")
+    assert lua.globals().reloaded is True
+
+    # Dragging around the minimap updates saved angle.
+    lua.execute("cursorX = 1100; cursorY = 700")  # directly east -> 0 deg
+    btn.scripts.OnDragStart(btn)
+    btn.scripts.OnUpdate(btn)
+    btn.scripts.OnDragStop(btn)
+    assert abs(account(lua)["ui"]["minimapAngle"] - 0) < 0.01, account(lua)["ui"]
+
+    # /wtf minimap off|on hides and shows the button and persists in SavedVariables.
+    slash(lua, "minimap off")
+    assert not btn.shown and account(lua)["ui"]["minimap"] is False
+    assert printed(lua)[-1].endswith("is off (/wtf minimap on|off)")
+    slash(lua, "minimap on")
+    assert btn.shown and account(lua)["ui"]["minimap"] is True
+    assert printed(lua)[-1].endswith("is on (/wtf minimap on|off)")
+    print("ok test_minimap_button")
+
 def test_locales():
     # A translation may only use keys that exist in English, with the same placeholders.
     texts = {}
@@ -1400,7 +1458,7 @@ def test_locales():
     for key, text in texts["enUS"].items():
         assert re.findall(r"%\.?\d*[dsf]", text) == re.findall(r"%\.?\d*[dsf]", texts["deDE"][key]), key
     # Every text the code asks for exists.
-    code = read("WoWMCP.lua") + read("Lists.lua") + read("History.lua")
+    code = read("WoWToolsForever.lua") + read("Lists.lua") + read("History.lua") + read("Minimap.lua")
     used = (set(re.findall(r"\bL\.(\w+)", code)) | set(re.findall(r'say\("(\w+)"', code))
             | set(re.findall(r'"(help\w+|\w+State)"', code)))
     assert used and used <= set(texts["enUS"]), used - set(texts["enUS"])
@@ -1411,12 +1469,12 @@ def test_locales():
     lua.execute("counts[284583] = 1; fire('BAG_UPDATE_DELAYED'); counts[284583] = 0; fire('BAG_UPDATE_DELAYED')")
     lua.execute("money = money + 3350; fire('PLAYER_MONEY')")
     for cmd in ("status", "help", "auto on", "items"):
-        lua.globals().SlashCmdList.WOWMCP(cmd)
+        lua.globals().SlashCmdList.WOWTOOLSFOREVER(cmd)
     out = "\n".join(printed(lua))
-    assert "Charakter zuletzt eingelesen" in out and "Bank: nie gescannt" in out and "ist an (/wowmcp auto on|off)" in out, out
+    assert "Charakter zuletzt eingelesen" in out and "Bank: nie gescannt" in out and "ist an (/wtf auto on|off)" in out, out
     assert "Münzbeutel 284583: 1x geöffnet, Schnitt 33.50s" in out, out
-    assert "lese 2 neue Items" in out and "/wowmcp sync - Charakter jetzt einlesen und /reload" in out, out
-    assert "/wowmcp show - die Listen der App" in out and "Listen der App: keine" in out, out
+    assert "lese 2 neue Items" in out and "/wtf sync - Charakter jetzt einlesen und /reload" in out, out
+    assert "/wtf show - die Listen der App" in out and "Listen der App: keine" in out, out
     print("ok test_locales")
 
 
@@ -1424,8 +1482,8 @@ def test_toc():
     fields, files = toc()
     assert fields["Interface"] == "16001" and re.fullmatch(r"\d+\.\d+\.\d+", fields["Version"]), fields
     # The data files come first, the texts before the code, and the window after the export.
-    order = ["AppRequest.lua", "AppData.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua", "History.lua"]
-    assert [f for f in files if f in order] == order and "WoWMCP_Account" in fields["SavedVariables"], files
+    order = ["AppRequest.lua", "AppData.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua", "History.lua", "Minimap.lua"]
+    assert [f for f in files if f in order] == order and "WoWToolsForever_Account" in fields["SavedVariables"], files
     for name in files:
         assert os.path.isfile(os.path.join(ROOT, name)), f"{name} is listed in the .toc but missing"
     for name in os.listdir(ROOT):
@@ -1452,5 +1510,6 @@ if __name__ == "__main__":
     test_price_history()
     test_price_history_without_auctionator_or_lists()
     test_lists_in_german()
+    test_minimap_button()
     test_locales()
     test_toc()

@@ -13,7 +13,7 @@ concurrency:
   group: release-${{ github.ref }}
 
 env:
-  ADDON: WoWMCP
+  ADDON: WoWToolsForever
 
 jobs:
   release:

@@ -1,8 +1,8 @@
--- WoWMCP lists: shows what the desktop app computed (AH upgrades, writs, trade crates, recipes, consumables)
+-- WoW Tools Forever lists: shows what the desktop app computed (AH upgrades, writs, trade crates, recipes, consumables)
 -- inside the game. Addons cannot read files, so the app writes the data as Lua into AppData.lua in this
 -- folder and the client loads it on the next /reload. This file only displays it:
 --
---   WoWMCP_AppData = { version, generated, hash, locale, scanDate, chars = { [<first name>] = {
+--   WoWToolsForever_AppData = { version, generated, hash, locale, scanDate, chars = { [<first name>] = {
 --       lists  = { { key, title, note, sections = { { title, note, rows = { row, ... } } } } },
 --       tips   = { [itemID] = { line, ... } },    lines added to the item's tooltip
 --       vendor = { [itemID] = line },             printed when a merchant sells the item
@@ -10,14 +10,14 @@
 --   row = { id, name, q (quality), n (count), info, price (copper), shop (on the shopping list), sub (indented) }
 --
 -- Money inside a text is written {m:<copper>} and becomes coins here. Rows marked `shop` also go into
--- Auctionator shopping lists called "WoWMCP: <list title>". Nothing here touches the export in WoWMCP.lua.
+-- Auctionator shopping lists called "WoW Tools Forever: <list title>". Nothing here touches the export in WoWToolsForever.lua.
 -- The window's last tab, the price history, lives in History.lua; this file switches to it.
 
 local _, ns = ...
 local L = ns.L
 
-local CALLER = "WoWMCP"            -- caller ID for Auctionator's API
-local LIST_PREFIX = "WoWMCP: "     -- Auctionator shopping lists this addon owns
+local CALLER = "WoWToolsForever"            -- caller ID for Auctionator's API
+local LIST_PREFIX = "WoW Tools Forever: "     -- Auctionator shopping lists this addon owns
 -- Modern dark stone panel matching the desktop app: slim title bar, flat underline tabs along the top,
 -- a context bar for the open tab's note, an inset body with crisp rows and a thin scrollbar, and a
 -- quiet footer with the auto-open toggle and the primary shopping action.
@@ -34,7 +34,7 @@ local MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT = 640, 420, 1600, 1200
 local CONTENT = { left = PAD, top = -BODY_TOP, right = -PAD, bottom = BODY_BOTTOM }
 local MAX_TABS = 6                 -- list tabs; the price history tab comes after them
 local TAB_MIN, TAB_MAX, TAB_GAP = 64, 168, 2
-local LOGO = "Interface\\Icons\\INV_Misc_Coin_02"
+local LOGO = "Interface\\AddOns\\WoWToolsForever\\Media\\Icon"
 local MAGNIFIER = "common-search-magnifyingglass"
 local CHECK_TEX = "Interface\\Buttons\\UI-CheckBox-Check"
 local MAX_SEARCH = 60              -- items in one Auctionator search
@@ -47,7 +47,7 @@ local QUESTION_MARK = 134400       -- icon for items the client does not know
 ---------------------------------------------------------------------------------------------------
 
 local function say(key, ...)
-    print("|cffffd100WoWMCP:|r " .. L[key]:format(...))
+    print("|cffffd100WoW Tools Forever:|r " .. L[key]:format(...))
 end
 
 local function unpackOk(ok, ...)
@@ -73,19 +73,20 @@ end
 
 -- The account-wide SavedVariables; they exist once the addon has loaded.
 local function settings()
-    if type(WoWMCP_Account) ~= "table" then WoWMCP_Account = {} end
-    local account = WoWMCP_Account
+    if type(WoWToolsForever_Account) ~= "table" then WoWToolsForever_Account = {} end
+    local account = WoWToolsForever_Account
     if type(account.ui) ~= "table" then account.ui = {} end
     local ui = account.ui
     if ui.tips == nil then ui.tips = true end     -- lines in item tooltips
     if ui.lists == nil then ui.lists = true end   -- Auctionator shopping lists
     if ui.ah == nil then ui.ah = true end         -- open the window with the auction house
+    if ui.minimap == nil then ui.minimap = true end -- show the minimap icon
     return ui
 end
 
 -- The data of the character that is logged in, and the whole file.
 local function charData()
-    local data = WoWMCP_AppData
+    local data = WoWToolsForever_AppData
     if type(data) ~= "table" or type(data.chars) ~= "table" then return nil, nil end
     local name = str(UnitName("player"))
     local own = name and data.chars[name]
@@ -1219,7 +1220,7 @@ local function newTab(onClick)
 end
 
 local function buildWindow()
-    frame = CreateFrame("Frame", "WoWMCPListFrame", UIParent)
+    frame = CreateFrame("Frame", "WoWToolsForeverListFrame", UIParent)
     local saved = settings().size
     if type(saved) == "table" and num(saved[1]) and num(saved[2]) then
         frame:SetSize(clampSize(saved[1], saved[2]))
@@ -1241,7 +1242,7 @@ local function buildWindow()
     frame:EnableMouseWheel(true)
     frame:RegisterForDrag("LeftButton")
     frame:Hide()
-    if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, "WoWMCPListFrame") end -- Escape closes it
+    if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, "WoWToolsForeverListFrame") end -- Escape closes it
 
     -- Opaque dark stone canvas with a 1px bronze frame and 1px black outer shadow.
     frame.outer = frameBox(frame, nil, THEME.outerShadow, -1)
@@ -1303,7 +1304,7 @@ local function toggleWindow()
     if frame and frame:IsShown() then frame:Hide() else showWindow() end
 end
 
--- /wowmcp price [name, ID or link]: the window on the price history tab.
+-- /wtf price [name, ID or link]: the window on the price history tab.
 local function openHistory(what)
     if not ns.history then return end
     if not (frame and frame:IsShown()) then showWindow() end
@@ -1360,7 +1361,7 @@ local function merchantHints()
         local text = id and vendor[id]
         if type(text) == "string" and (hinted[id] or -VENDOR_QUIET) + VENDOR_QUIET <= now then
             hinted[id] = now
-            print("|cffffd100WoWMCP:|r " .. itemLink({ id = id }) .. " " .. expand(text))
+            print("|cffffd100WoW Tools Forever:|r " .. itemLink({ id = id }) .. " " .. expand(text))
         end
     end
 end
@@ -1371,12 +1372,12 @@ end
 
 -- What the game has loaded, for the app: it reads this from the SavedVariables after the next /reload.
 local function markLoaded()
-    local data = WoWMCP_AppData
-    if type(WoWMCP_Account) ~= "table" then return end
+    local data = WoWToolsForever_AppData
+    if type(WoWToolsForever_Account) ~= "table" then return end
     if type(data) == "table" and type(data.chars) == "table" then
-        WoWMCP_Account.appData = { generated = num(data.generated), hash = str(data.hash), loaded = time() }
+        WoWToolsForever_Account.appData = { generated = num(data.generated), hash = str(data.hash), loaded = time() }
     else
-        WoWMCP_Account.appData = nil
+        WoWToolsForever_Account.appData = nil
     end
 end
 
@@ -1434,7 +1435,7 @@ events:SetScript("OnEvent", function(_, event)
 end)
 
 ---------------------------------------------------------------------------------------------------
--- Slash commands (dispatched by WoWMCP.lua) and the status line
+-- Slash commands (dispatched by WoWToolsForever.lua) and the status line
 ---------------------------------------------------------------------------------------------------
 
 local function switch(key, stateText, arg, changed)
@@ -1460,6 +1461,11 @@ ns.commands = {
             else
                 removeShoppingLists()
             end
+        end)
+    end,
+    minimap = function(arg)
+        switch("minimap", "minimapState", arg, function(on)
+            if ns.minimap then ns.minimap.setShown(on) end
         end)
     end,
 }

@@ -11,7 +11,7 @@ import zipfile
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 NAME = os.path.splitext(os.path.basename(glob.glob(os.path.join(ROOT, "*.toc"))[0]))[0]
-NOT_SHIPPED = ("tests/", ".github/", "README.md", ".pkgmeta", ".git")
+NOT_SHIPPED = ("tests/", ".github/", "README.md", "GEMINI.md", ".pkgmeta", ".git")
 
 
 def check(path):
