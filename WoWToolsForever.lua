@@ -152,6 +152,29 @@ local function collectStats()
     s.dodge = num(try(GetDodgeChance))
     s.parry = num(try(GetParryChance))
     s.block = num(try(GetBlockChance))
+    s.blockValue = num(try(GetShieldBlock))
+    local defBase, defMod = try(UnitDefense, "player")
+    if num(defBase) then s.defense = defBase + (num(defMod) or 0) end
+    local mhSpeed, ohSpeed = try(UnitAttackSpeed, "player")
+    if num(mhSpeed) and mhSpeed > 0 then
+        s.meleeSpeed = mhSpeed
+        if num(ohSpeed) and ohSpeed > 0 then s.offhandSpeed = ohSpeed end
+    end
+    local mhMin, mhMax, ohMin, ohMax = try(UnitDamage, "player")
+    if num(mhMin) and num(mhMax) then
+        s.meleeDamage = { min = mhMin, max = mhMax }
+        if num(ohMin) and num(ohMax) and (ohMin > 0 or ohMax > 0) then
+            s.offhandDamage = { min = ohMin, max = ohMax }
+        end
+    end
+    local rSpeed, rMin, rMax = try(UnitRangedDamage, "player")
+    if num(rSpeed) and rSpeed > 0 then
+        s.rangedSpeed = rSpeed
+        if num(rMin) and num(rMax) then s.rangedDamage = { min = rMin, max = rMax } end
+    end
+    s.meleeHaste = num(try(GetMeleeHaste))
+    s.rangedHaste = num(try(GetRangedHaste))
+    if try(IsDualWielding) then s.dualWield = true end
     s.healing = num(try(GetSpellBonusHealing))
     for school, key in pairs(SPELL_SCHOOLS) do
         s.spellDamage[key] = num(try(GetSpellBonusDamage, school))
@@ -170,6 +193,10 @@ local function collectStats()
         local fromInt = num(try(GetSpellCritChanceFromStat, 4, s.intellect))
         s.critFromIntellect = fromInt and fromInt * 100 -- percent from all intellect
     end
+    if s.agility then
+        local fromAgi = num(try(GetCritChanceFromAgility, "player"))
+        if fromAgi then s.critFromAgility = fromAgi end
+    end
     s.hpPerStamina = num(try(UnitHPPerStamina, "player"))
     -- Since 1.12: mana per second as the character sheet computes it (it shows these times 5):
     -- `base` outside the five-second rule, `casting` while casting; the two `spirit` values are the
@@ -181,6 +208,17 @@ local function collectStats()
     end
     s.manaPerIntellect = num(MANA_PER_INTELLECT)
     s.spellHaste = num(try(UnitSpellHaste, "player")) -- percent, since 1.12
+    local formIndex = num(try(GetShapeshiftForm))
+    if formIndex and formIndex > 0 then
+        local _, active, _, formSpellID = try(GetShapeshiftFormInfo, formIndex)
+        if active or formSpellID then
+            s.form = {
+                index = formIndex,
+                spellID = num(formSpellID),
+                name = formSpellID and str(try(C_Spell.GetSpellName, formSpellID)) or nil,
+            }
+        end
+    end
     s.lifeTap = collectLifeTap()
     return s
 end
@@ -232,6 +270,21 @@ local function keepStats(c)
     end
 end
 
+local function collectPet()
+    if not try(UnitExists, "pet") then return nil end
+    local speed = num(try(UnitAttackSpeed, "pet"))
+    local dmgMin, dmgMax = try(UnitDamage, "pet")
+    return {
+        name = str(try(UnitName, "pet")),
+        family = str(try(UnitCreatureFamily, "pet")),
+        level = num(try(UnitLevel, "pet")),
+        healthMax = num(try(UnitHealthMax, "pet")),
+        attackPower = sumAttackPower(try(UnitAttackPower, "pet")),
+        speed = (speed and speed > 0) and speed or nil,
+        damage = (num(dmgMin) and num(dmgMax)) and { min = dmgMin, max = dmgMax } or nil,
+    }
+end
+
 local function collectCharacter()
     local first, surname = UnitName("player")
     local className, classFile = UnitClass("player")
@@ -258,6 +311,7 @@ local function collectCharacter()
         pvpRank = collectPvpRank(),
         stats = collectStats(),
         buffs = collectBuffs(),
+        pet = collectPet(),
     }
     keepStats(c)
     local mapID = try(C_Map.GetBestMapForUnit, "player")
@@ -1140,6 +1194,7 @@ local SNAPSHOT_EVENTS = {
     "PLAYER_ENTERING_WORLD", "BAG_UPDATE_DELAYED", "PLAYER_EQUIPMENT_CHANGED", "QUEST_LOG_UPDATE",
     "UPDATE_FACTION", "SKILL_LINES_CHANGED", "TRAIT_CONFIG_UPDATED", "PLAYER_MONEY", "PLAYER_LEVEL_UP",
     "PLAYER_XP_UPDATE", "ZONE_CHANGED", "ZONE_CHANGED_NEW_AREA", "PLAYER_GUILD_UPDATE",
+    "UPDATE_SHAPESHIFT_FORM",
 }
 local SNAPSHOT_EVENT = {}
 for _, event in ipairs(SNAPSHOT_EVENTS) do

@@ -606,6 +606,70 @@ def test_snapshot():
     print("ok test_snapshot")
 
 
+def test_physical_and_pet_stats():
+    lua = new_runtime()
+    lua.execute(r"""
+        function UnitClass() return "Warrior", "WARRIOR" end
+        function UnitPowerType() return 1, "RAGE" end
+        function UnitPowerMax() return 100 end
+        function UnitAttackPower(unit)
+          if unit == "pet" then return 120, 10, 0 end
+          return 400, 50, -10
+        end
+        function UnitRangedAttackPower() return 250, 20, 0 end
+        function GetCritChance() return 18.5 end
+        function GetRangedCritChance() return 12.25 end
+        function GetHitModifier() return 6 end
+        function GetDodgeChance() return 8.4 end
+        function GetParryChance() return 5.2 end
+        function GetBlockChance() return 6.0 end
+        function GetShieldBlock() return 48 end
+        function UnitDefense() return 300, 15 end
+        function UnitAttackSpeed(unit)
+          if unit == "pet" then return 2.0 end
+          return 2.6, 1.8
+        end
+        function UnitDamage(unit)
+          if unit == "pet" then return 30, 45 end
+          return 120, 180, 60, 95
+        end
+        function UnitRangedDamage() return 2.9, 80, 140 end
+        function GetMeleeHaste() return 15 end
+        function GetRangedHaste() return 10 end
+        function IsDualWielding() return true end
+        function GetCritChanceFromAgility() return 6.2 end
+        function GetShapeshiftForm() return 2 end
+        function GetShapeshiftFormInfo(i) return 132341, true, true, 71 end
+        function UnitExists(unit) return unit == "pet" end
+        function UnitName(unit) if unit == "pet" then return "Fang" end return "Grom", "Ironjaw" end
+        function UnitCreatureFamily() return "Wolf" end
+        function UnitLevel(unit) return unit == "pet" and 45 or 46 end
+        function UnitHealthMax(unit) return unit == "pet" and 1400 or 2600 end
+    """)
+    load_addon(lua)
+    c = char(lua)
+    assert c["errors"] == {}, c["errors"]
+    who = c["character"]
+    assert who["classFile"] == "WARRIOR"
+    st = who["stats"]
+    assert st["powerType"] == "RAGE" and st["powerMax"] == 100
+    assert st["attackPower"] == 440 and st["rangedAttackPower"] == 270
+    assert st["meleeCrit"] == 18.5 and st["rangedCrit"] == 12.25 and st["meleeHit"] == 6
+    assert st["defense"] == 315 and st["blockValue"] == 48 and st["parry"] == 5.2 and st["block"] == 6.0
+    assert st["meleeSpeed"] == 2.6 and st["offhandSpeed"] == 1.8
+    assert st["meleeDamage"] == {"min": 120, "max": 180}
+    assert st["offhandDamage"] == {"min": 60, "max": 95}
+    assert st["rangedSpeed"] == 2.9 and st["rangedDamage"] == {"min": 80, "max": 140}
+    assert st["meleeHaste"] == 15 and st["rangedHaste"] == 10 and st["dualWield"] is True
+    assert st["critFromAgility"] == 6.2
+    assert st["form"] == {"index": 2, "spellID": 71, "name": "Spell 71"}
+    assert who["pet"] == {
+        "name": "Fang", "family": "Wolf", "level": 45, "healthMax": 1400,
+        "attackPower": 130, "speed": 2.0, "damage": {"min": 30, "max": 45},
+    }
+    print("ok test_physical_and_pet_stats")
+
+
 def test_stats_in_an_instance():
     lua = new_runtime()
     load_addon(lua)
@@ -1494,6 +1558,7 @@ def test_toc():
 
 if __name__ == "__main__":
     test_snapshot()
+    test_physical_and_pet_stats()
     test_stats_in_an_instance()
     test_combat_and_bank()
     test_payouts()
