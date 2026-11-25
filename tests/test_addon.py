@@ -511,9 +511,9 @@ def new_runtime(locale="enUS"):
     return lua
 
 
-def load_addon(lua, request=None, enter=True, data=None):
+def load_addon(lua, request=None, enter=True, data=None, sync_history=None):
     """Runs the files of the .toc like the client does on login or /reload: in order, sharing one table.
-    `request` and `data` are what the desktop app wrote into AppRequest.lua and AppData.lua (Lua source)."""
+    `request`, `data` and `sync_history` are what the desktop app wrote into AppRequest.lua, AppData.lua and SyncHistory.lua."""
     load = lua.eval("function(src, name) return assert(load(src, name)) end")
     lua.execute("timers, frames, postCalls = {}, {}, {}")
     ns = lua.table()
@@ -522,6 +522,8 @@ def load_addon(lua, request=None, enter=True, data=None):
             lua.execute(f"WoWToolsForever_AppRequest = {request or 'nil'}")
         elif name == "AppData.lua":
             lua.execute(f"WoWToolsForever_AppData = {data or 'nil'}")
+        elif name == "SyncHistory.lua":
+            lua.execute(f"WoWToolsForever_SyncHistory = {sync_history or 'nil'}")
         else:
             load(read(name), name)(NAME, ns)
     lua.execute('fire("ADDON_LOADED", "WoWToolsForever")')
@@ -1542,11 +1544,54 @@ def test_locales():
     print("ok test_locales")
 
 
+def test_price_history_sync():
+    # 1. Merges synced history (older days + overlapping day) with Auctionator's local database.
+    lua = new_runtime()
+    lua.execute('function GetRealmName() return "PvP" end')
+    sync = '''{
+        version = 1, market = "eu/pvp/horde", realm = "PvP", faction = "Horde",
+        day0 = 1577836800, lastDay = 102, maxDays = 180,
+        items = {
+            [2447] = "390|50,200,250,30;100,320,450,55;102,390,,40",
+            [7777] = "1200|101,1100,1300,12;102,1200,,15",
+        },
+    }'''
+    load_addon(lua, data=app_data(), sync_history=sync)
+    slash(lua, "price 2447")
+    h = history_panel(lua)
+    days = lua_to_py(h.plot.days)
+    # Local had days 95, 97, 100; sync adds 50 and 102, and widens day 100 low/high/offers.
+    day_nums = [d["day"] for d in days]
+    assert day_nums == [50, 95, 97, 100, 102], day_nums
+    day100 = [d for d in days if d["day"] == 100][0]
+    assert day100["low"] == 320 and day100["high"] == 450 and day100["offers"] == 55, day100
+    assert "3s 90c" in h.summary.text, h.summary.text
+
+    # 2. Works even completely without Auctionator installed.
+    lua = new_runtime()
+    lua.execute('Auctionator = nil; function GetRealmName() return "PvP" end')
+    load_addon(lua, data="nil", sync_history=sync)
+    slash(lua, "price 7777")
+    h = history_panel(lua)
+    days = lua_to_py(h.plot.days)
+    assert [d["day"] for d in days] == [101, 102], days
+    assert "12s 0c" in h.summary.text, h.summary.text
+
+    # 3. Ignored when faction or realm does not match the logged-in character.
+    lua = new_runtime()
+    lua.execute('Auctionator = nil; function GetRealmName() return "PvP" end; function UnitFactionGroup() return "Alliance" end')
+    load_addon(lua, data="nil", sync_history=sync)
+    slash(lua, "price 7777")
+    h = history_panel(lua)
+    assert h.plot.days is None, "Horde sync data must not load on an Alliance character"
+    print("ok test_price_history_sync")
+
+
 def test_toc():
     fields, files = toc()
     assert fields["Interface"] == "16001" and re.fullmatch(r"\d+\.\d+\.\d+", fields["Version"]), fields
     # The data files come first, the texts before the code, and the window after the export.
-    order = ["AppRequest.lua", "AppData.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua", "History.lua", "Minimap.lua"]
+    order = ["AppRequest.lua", "AppData.lua", "SyncHistory.lua", "Locales.lua", f"{NAME}.lua", "Lists.lua", "History.lua", "Minimap.lua"]
     assert [f for f in files if f in order] == order and "WoWToolsForever_Account" in fields["SavedVariables"], files
     for name in files:
         assert os.path.isfile(os.path.join(ROOT, name)), f"{name} is listed in the .toc but missing"
@@ -1574,6 +1619,7 @@ if __name__ == "__main__":
     test_lists_without_or_with_bad_data()
     test_price_history()
     test_price_history_without_auctionator_or_lists()
+    test_price_history_sync()
     test_lists_in_german()
     test_minimap_button()
     test_locales()

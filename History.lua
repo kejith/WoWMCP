@@ -50,8 +50,54 @@ local function database()
     if type(db) == "table" and day0 then return db, day0 end
 end
 
+-- Community-synced history written by the desktop app (SyncHistory.lua). Only used when realm and faction match.
+local syncCache = {}
+local function syncStore()
+    local s = WoWToolsForever_SyncHistory
+    if type(s) ~= "table" or type(s.items) ~= "table" then return nil end
+    local realm = U.str(U.try(GetRealmName))
+    local faction = U.str(U.try(UnitFactionGroup, "player"))
+    if realm and U.str(s.realm) and realm:lower() ~= s.realm:lower() then return nil end
+    if faction and U.str(s.faction) and faction:lower() ~= s.faction:lower() then return nil end
+    return s
+end
+
+local function hasData()
+    return database() ~= nil or syncStore() ~= nil
+end
+
+local function parseSyncItem(id)
+    local s = syncStore()
+    local raw = s and s.items[id]
+    if type(raw) ~= "string" then return nil end
+    local cached = syncCache[id]
+    if cached and cached.raw == raw then return cached end
+    local bar = raw:find("|", 1, true)
+    local last = bar and tonumber(raw:sub(1, bar - 1)) or nil
+    local body = bar and raw:sub(bar + 1) or raw
+    local days, maxDay = {}, nil
+    for part in body:gmatch("[^;]+") do
+        local d, lo, hi, av = part:match("^(%d+),(%d+),(%d*),(%d*)$")
+        local day, low = tonumber(d), tonumber(lo)
+        if day and low and low > 0 then
+            local high = tonumber(hi)
+            if not high or high < low then high = low end
+            local offers = tonumber(av)
+            days[day] = { day = day, low = low, high = high, offers = offers }
+            if not maxDay or day > maxDay then maxDay = day end
+        end
+    end
+    cached = { raw = raw, m = last, days = days, maxDay = maxDay }
+    syncCache[id] = cached
+    return cached
+end
+
 local function dayTime(day)
     local _, day0 = database()
+    if not day0 then
+        local s = syncStore()
+        day0 = s and U.num(s.day0)
+    end
     return (day0 or 0) + day * DAY + DAY / 2 -- noon, so a change of daylight saving time cannot move the date
 end
 
@@ -64,23 +110,49 @@ local function lower(text)
     return (text:lower():gsub("\195\132", "\195\164"):gsub("\195\150", "\195\182"):gsub("\195\156", "\195\188"))
 end
 
--- One item's history, oldest day first: {day, low, high, offers}.
+-- One item's history, oldest day first: {day, low, high, offers}. Merges local Auctionator data with SyncHistory.lua.
 local function history(id)
+    local byDay = {}
+    local localLast, localMaxDay
     local db = database()
     local entry = db and db[tostring(id)]
-    if type(entry) ~= "table" or type(entry.h) ~= "table" then return {}, nil end
-    local lows, offers = type(entry.l) == "table" and entry.l or {}, type(entry.a) == "table" and entry.a or {}
-    local out = {}
-    for key, high in pairs(entry.h) do
-        local day, top = tonumber(key), U.num(high)
-        if day and top and top > 0 then
-            local low = U.num(lows[key])
-            out[#out + 1] = { day = day, low = (low and low > 0 and low <= top) and low or top, high = top,
-                              offers = U.num(offers[key]) }
+    if type(entry) == "table" and type(entry.h) == "table" then
+        local lows = type(entry.l) == "table" and entry.l or {}
+        local offers = type(entry.a) == "table" and entry.a or {}
+        for key, high in pairs(entry.h) do
+            local day, top = tonumber(key), U.num(high)
+            if day and top and top > 0 then
+                local low = U.num(lows[key])
+                byDay[day] = { day = day, low = (low and low > 0 and low <= top) and low or top, high = top,
+                               offers = U.num(offers[key]) }
+                if not localMaxDay or day > localMaxDay then localMaxDay = day end
+            end
+        end
+        localLast = U.num(entry.m)
+    end
+    local synced = parseSyncItem(id)
+    local syncLast, syncMaxDay
+    if synced then
+        syncLast, syncMaxDay = synced.m, synced.maxDay
+        for day, sd in pairs(synced.days) do
+            local cur = byDay[day]
+            if cur then
+                if sd.low < cur.low then cur.low = sd.low end
+                if sd.high > cur.high then cur.high = sd.high end
+                if sd.offers and (not cur.offers or sd.offers > cur.offers) then cur.offers = sd.offers end
+            else
+                byDay[day] = { day = sd.day, low = sd.low, high = sd.high, offers = sd.offers }
+            end
         end
     end
+    local out = {}
+    for _, d in pairs(byDay) do out[#out + 1] = d end
     table.sort(out, function(a, b) return a.day < b.day end)
-    return out, U.num(entry.m)
+    local last = localLast
+    if not last or (syncLast and syncMaxDay and (not localMaxDay or syncMaxDay > localMaxDay)) then
+        last = syncLast or last
+    end
+    return out, last
 end
 
 local function setName(id, name)
@@ -156,16 +228,33 @@ end
 -- export. Names neither knows are asked from the server afterwards (loadNames).
 local function buildIndex()
     local db = database()
-    if not db or index.building then return end
+    local sync = syncStore()
+    if (not db and not sync) or index.building then return end
     index.building, index.stale = true, false
-    local ids, lastDay = {}, nil
-    for key, entry in pairs(db) do
-        local id = tonumber(key)
-        if id and type(entry) == "table" and type(entry.h) == "table" then
-            ids[#ids + 1] = id
-            for day in pairs(entry.h) do
-                day = tonumber(day)
-                if day and (not lastDay or day > lastDay) then lastDay = day end
+    local seen, ids, lastDay = {}, {}, nil
+    if db then
+        for key, entry in pairs(db) do
+            local id = tonumber(key)
+            if id and type(entry) == "table" and type(entry.h) == "table" then
+                if not seen[id] then
+                    seen[id] = true
+                    ids[#ids + 1] = id
+                end
+                for day in pairs(entry.h) do
+                    day = tonumber(day)
+                    if day and (not lastDay or day > lastDay) then lastDay = day end
+                end
+            end
+        end
+    end
+    if sync then
+        local syncLast = U.num(sync.lastDay)
+        if syncLast and (not lastDay or syncLast > lastDay) then lastDay = syncLast end
+        for key, raw in pairs(sync.items) do
+            local id = tonumber(key)
+            if id and type(raw) == "string" and not seen[id] then
+                seen[id] = true
+                ids[#ids + 1] = id
             end
         end
     end
@@ -214,8 +303,9 @@ local function find(text)
     text = strtrim(text or "")
     local id = tonumber(text:match("item:(%d+)") or text:match("^#?(%d+)$") or "")
     if id then
-        local db = database()
-        local found = (db and db[tostring(id)]) and { id } or {}
+        local db, sync = database(), syncStore()
+        local present = (db and db[tostring(id)]) or (sync and type(sync.items[id]) == "string")
+        local found = present and { id } or {}
         return found, #found, true
     end
     local query = lower(text)
@@ -493,7 +583,7 @@ local function showItem(id)
         panel.plot.labels:reset()
         panel.plot.hoverDot:Hide()
         panel.plot.days = nil
-        panel.plot.empty:SetText(database() and L.historyHint or L.noAuctionator)
+        panel.plot.empty:SetText(hasData() and L.historyHint or L.noAuctionator)
         panel.plot.empty:Show()
         return
     end
@@ -574,7 +664,7 @@ local function search()
     local found, total, byId = find(text)
     local note = byId and "" or nameNote()
     offset = 0
-    if not database() then
+    if not hasData() then
         results = {}
         panel.status:SetText("")
     elseif found then
@@ -955,8 +1045,9 @@ events:SetScript("OnEvent", function(_, event, id)
         end
     elseif event == "GET_ITEM_INFO_RECEIVED" then
         id = U.num(id)
-        local db = database()
-        if not (id and db and index.lower[id] == nil and type(db[tostring(id)]) == "table") then return end
+        local db, sync = database(), syncStore()
+        local knownInSource = (db and type(db[tostring(id)]) == "table") or (sync and type(sync.items[id]) == "string")
+        if not (id and knownInSource and index.lower[id] == nil) then return end
         local name = U.str(U.try(C_Item and C_Item.GetItemNameByID, id))
         if not name then return end
         setName(id, name)
