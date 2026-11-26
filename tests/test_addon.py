@@ -1587,6 +1587,32 @@ def test_price_history_sync():
     print("ok test_price_history_sync")
 
 
+def test_enchants_export():
+    lua = new_runtime()
+    lua.execute(
+        '''
+        local origGetLink = GetInventoryItemLink
+        function GetInventoryItemLink(unit, slot)
+            if slot == 1 then
+                return "|cff0070dd|Hitem:4000:2504:0:0:0:0:0:0|h[Shadow Hat]|h|r"
+            end
+            return origGetLink(unit, slot)
+        end
+        function GetWeaponEnchantInfo()
+            return true, 1200000, 0, 2628, true, 600000, 5, 7
+        end
+        '''
+    )
+    load_addon(lua)
+    snap = lua_to_py(lua.globals().WoWToolsForever_Char)
+    hat = [e for e in snap["equipment"] if e["slot"] == 1][0]
+    assert hat["enchantId"] == 2504, hat
+    we = snap["character"]["weaponEnchants"]
+    assert we["mainHand"]["id"] == 2628 and we["mainHand"]["remainingSec"] == 1200, we
+    assert we["offHand"]["id"] == 7 and we["offHand"]["charges"] == 5 and we["offHand"]["remainingSec"] == 600, we
+    print("ok test_enchants_export")
+
+
 def test_toc():
     fields, files = toc()
     assert fields["Interface"] == "16001" and re.fullmatch(r"\d+\.\d+\.\d+", fields["Version"]), fields
@@ -1623,4 +1649,5 @@ if __name__ == "__main__":
     test_lists_in_german()
     test_minimap_button()
     test_locales()
+    test_enchants_export()
     test_toc()

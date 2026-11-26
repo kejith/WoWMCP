@@ -285,6 +285,28 @@ local function collectPet()
     }
 end
 
+-- Temporary weapon enchants (oils, sharpening stones, poisons, shaman imbues): GetWeaponEnchantInfo
+-- reports active main-hand and off-hand SpellItemEnchantment IDs and remaining duration in milliseconds.
+local function collectWeaponEnchants()
+    local mhHas, mhExp, mhCharges, mhID, ohHas, ohExp, ohCharges, ohID = try(GetWeaponEnchantInfo)
+    local out = {}
+    if mhHas and num(mhID) and mhID > 0 then
+        out.mainHand = {
+            id = mhID,
+            remainingSec = (num(mhExp) and mhExp > 0) and math.floor(mhExp / 1000 + 0.5) or nil,
+            charges = (num(mhCharges) and mhCharges > 0) and mhCharges or nil,
+        }
+    end
+    if ohHas and num(ohID) and ohID > 0 then
+        out.offHand = {
+            id = ohID,
+            remainingSec = (num(ohExp) and ohExp > 0) and math.floor(ohExp / 1000 + 0.5) or nil,
+            charges = (num(ohCharges) and ohCharges > 0) and ohCharges or nil,
+        }
+    end
+    return next(out) and out or nil
+end
+
 local function collectCharacter()
     local first, surname = UnitName("player")
     local className, classFile = UnitClass("player")
@@ -311,6 +333,7 @@ local function collectCharacter()
         pvpRank = collectPvpRank(),
         stats = collectStats(),
         buffs = collectBuffs(),
+        weaponEnchants = collectWeaponEnchants(),
         pet = collectPet(),
     }
     keepStats(c)
@@ -338,6 +361,8 @@ local function collectEquipment()
         if link then
             local rec = itemRecord(link, try(GetInventoryItemID, "player", slot), 1)
             rec.slot = slot
+            local enchID = str(link) and tonumber(link:match("item:%d+:(%d+)")) or nil
+            if num(enchID) and enchID > 0 then rec.enchantId = enchID end
             local cur, max = try(GetInventoryItemDurability, slot)
             if num(cur) and num(max) then rec.durability = { cur, max } end
             rec.stats = copyPlain(try(C_Item.GetItemStats, link))
