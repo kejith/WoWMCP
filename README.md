@@ -146,3 +146,7 @@ The release workflow also uploads to CurseForge and Wago Addons as soon as both 
 | [Wago Addons](https://addons.wago.io/developers) | create the project | `## X-Wago-ID: <id>` | `WAGO_API_TOKEN` from <https://addons.wago.io/account/apikeys> |
 
 Set a secret with `gh secret set CF_API_TOKEN --repo kejith/WoWToolsForever`. The packager marks the upload as compatible with WoW: Forever from the interface number in the `.toc`. WoWInterface has no category for WoW: Forever.
+
+## License
+
+Licensed under the [GNU General Public License v3.0](LICENSE).
